@@ -34,7 +34,8 @@ async function login(root, token, oldValue) {
     if (oldValue) await context.setCookie({ name: 'foxwarm_token', value: oldValue, domain: '127.0.0.1', path, httpOnly: true, sameSite: 'Strict', expires: Date.now() / 1000 + 28800 })
     // A sibling cookie must survive the transition, even on the same host.
     await context.setCookie({ name: 'foxwarm_token', value: 'unrelated-sibling', domain: '127.0.0.1', path: '/sibling/', httpOnly: true })
-    await page.goto(root + 'login.html', { waitUntil: 'domcontentloaded' })
+    const loginDocument = await page.goto(root + 'login.html', { waitUntil: 'domcontentloaded' })
+    assert.equal(loginDocument.headers()['content-security-policy'], "frame-ancestors 'self'")
     if (oldValue) {
       await page.evaluate(() => { document.cookie = 'foxwarm_token=blocked-script-write; path=' + location.pathname.replace(/[^/]+$/, '') })
       assert.equal((await context.cookies()).find(cookie => cookie.path === path)?.value, oldValue, 'An old HttpOnly cookie really blocks the unchanged script write')
@@ -89,13 +90,27 @@ try {
       const path = new URL(root).pathname
       const before = Date.now() / 1000
       await context.setCookie({ name: 'foxwarm_token', value: host.token, domain: '127.0.0.1', path, sameSite, expires: before + 86400 })
-      await page.goto(root, { waitUntil: 'networkidle2' })
+      const document = await page.goto(root, { waitUntil: 'networkidle2' })
+      assert.equal(document.headers()['content-security-policy'], "frame-ancestors 'self'")
       const renewed = (await context.cookies()).find(c => c.name === 'foxwarm_token' && c.path === path)
       assert.equal(renewed?.sameSite, 'Lax')
       assert(renewed.expires >= before + 31536000 - 2 && renewed.expires <= Date.now() / 1000 + 31536000 + 2, JSON.stringify(renewed))
       assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), null)
     } finally { await context.close() }
   }
+  // The two loopback listeners are same-site but different origins. Chrome must enforce
+  // the frame policy even for an authenticated sidebar and a parent that chose its nonce.
+  const framing = await browser.createBrowserContext()
+  try {
+    const page = await framing.newPage()
+    await framing.setCookie({ name: 'foxwarm_token', value: host.token, url: host.origin, sameSite: 'Lax' })
+    await page.goto(proxyRoot + 'login.html', { waitUntil: 'domcontentloaded' })
+    const violation = page.waitForFrame(frame => frame.parentFrame() === page.mainFrame() && frame.url() === 'chrome-error://chromewebdata/')
+    await page.evaluate(url => {
+      const frame = document.createElement('iframe'); frame.src = url; document.body.append(frame)
+    }, host.origin + '/?foxwarmEmbed=sidebar&foxwarmEmbedNonce=sameSiteFrameFixture')
+    await violation
+  } finally { await framing.close() }
   const scoped = await login(proxyRoot, 'synthetic-reader-cookie', null)
   config.access.identities.reader.token = 'synthetic-reader-rotated'
   assert.equal((await host.api('POST', '/api/setup/config', { yaml: JSON.stringify(config) })).status, 200)

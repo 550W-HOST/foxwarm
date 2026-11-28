@@ -93,13 +93,21 @@ export function readFoxwarmFocusModelsMessage(value: unknown, nonce: string): bo
 }
 
 export function postFoxwarmEmbedHostMessage(nonce: string, payload: FoxwarmEmbedHostPayload): void {
-  if (window.parent === window) return
-  window.parent.postMessage({
+  const parent = window.parent
+  if (parent === window) return
+  const origin = window.location.origin
+  try {
+    if (parent.origin !== origin) return
+  } catch {
+    // Browsers deny access to a cross-origin parent's Window.
+    return
+  }
+  parent.postMessage({
     channel: FOXWARM_EMBED_CHANNEL,
     version: FOXWARM_EMBED_VERSION,
     nonce,
     ...payload,
-  }, '*')
+  }, origin)
 }
 
 export function readEmbeddedSessionLink(target: EventTarget | null): string | null {

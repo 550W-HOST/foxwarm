@@ -7,11 +7,13 @@ Secondary files: packages/webui/vite.config.ts, packages/webui/src/components/fo
 
 Responsive, independent token entry before the authenticated application. The existing public file and POST authentication endpoint remain the backend integration surface. Login does not mount the application, request protected assets or enumerate Sessions. Legacy-cookie recovery uses the authenticated session endpoint to confirm a valid role before re-entry.
 
+Main serves the login and signed-in WebUI documents with `Content-Security-Policy: frame-ancestors 'self'`. This includes their prefixed URLs and nested WebUI documents in the first-party same-origin Code workbench.
+
 ## Cookie origins
 
 For cookie-authenticated administrator and scoped requests, the server checks browser origins on WebSocket upgrades and POST, PUT, PATCH and DELETE. Requests without `Origin` are allowed; a refused origin receives HTTP 403 before dispatch. Bearer clients, token sign-in, Node pairing and independent webhook and MCP authentication keep their own credential paths.
 
-- On a multi-tenant replica the origin must have the public scheme and port, and the same hostname directory that routes traffic must assign its hostname to this tenant. Mapped aliases work even through an internal HTTP listener. Legacy single-tenant hosting checks its public origin. Hosted checks apply to both HTTP and WebSockets, regardless of Fetch Metadata.
+- On a multi-tenant replica the origin must have the public scheme and port, and the same hostname directory that routes traffic must assign its hostname to this tenant. The directory compares numeric tenant IDs; slug reuse cannot reauthorize an old runtime. A hostname reassignment affects new admissions after the directory processes its notification or refreshes within 30 seconds. Existing sockets stay with the tenant that authenticated their handshake. Mapped aliases work even through an internal HTTP listener. Legacy single-tenant hosting checks its public origin. Hosted checks apply to both HTTP and WebSockets, regardless of Fetch Metadata.
 - In file mode a browser HTTP request may establish its origin with `Sec-Fetch-Site: same-origin`, the configured public URL, the request’s own origin or `X-Forwarded-Host`. Browser JavaScript cannot set Fetch Metadata; setting `X-Forwarded-Host` on a cross-origin fetch requires a preflight the application does not grant. A WebSocket client in a page cannot set custom headers.
 - File-mode WebSockets enforce the configured public URL, request origin or forwarded public host when `url` is set. Without a public URL the server permits upgrades for compatibility with reverse proxies that rewrite Host; browsers can omit Fetch Metadata from the handshake. The first otherwise-mismatched cookie upgrade logs the configuration hint once per process.
 

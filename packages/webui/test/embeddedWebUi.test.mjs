@@ -63,20 +63,25 @@ test('accepts only the nonce-bound fixed Models focus signal from the Code host'
 
 test('posts a versioned fixed-shape message only when embedded', () => {
   const messages = []
-  const parent = { postMessage: (...args) => messages.push(args) }
-  globalThis.window = { parent }
+  const origin = 'https://alpha.example'
+  const parent = { origin, postMessage: (...args) => messages.push(args) }
+  globalThis.window = { parent, location: { origin } }
   postFoxwarmEmbedHostMessage(nonce, { type: 'open-session', sessionId: 'agent/task' })
   assert.deepEqual(messages, [[{
     channel: 'foxwarm-webui-embed', version: 1, nonce, type: 'open-session', sessionId: 'agent/task',
-  }, '*']])
+  }, origin]])
   postFoxwarmEmbedHostMessage(nonce, { type: 'open-terminal' })
   assert.deepEqual(messages[1], [{
     channel: 'foxwarm-webui-embed', version: 1, nonce, type: 'open-terminal',
-  }, '*'])
+  }, origin])
   postFoxwarmEmbedHostMessage(nonce, { type: 'open-setup', focus: 'models' })
   assert.deepEqual(messages[2], [{
     channel: 'foxwarm-webui-embed', version: 1, nonce, type: 'open-setup', focus: 'models',
-  }, '*'])
+  }, origin])
+  const selection = { type: 'open-session', sessionId: 'agent/task', title: 'Private session' }
+  window.parent = { get origin() { throw new DOMException('Cross-origin access', 'SecurityError') }, postMessage: parent.postMessage }
+  postFoxwarmEmbedHostMessage(nonce, selection)
+  assert.equal(messages.length, 3)
   globalThis.window = { parent: null }
   globalThis.window.parent = globalThis.window
   postFoxwarmEmbedHostMessage(nonce, { type: 'open-session', sessionId: 'ignored' })

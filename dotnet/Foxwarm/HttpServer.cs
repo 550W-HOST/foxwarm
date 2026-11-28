@@ -306,6 +306,7 @@ internal sealed class HttpServer
                 if (staticEntry && (!valid || context.Request.Path == "/login.html"))
                 {
                     context.Response.ContentType = "text/html; charset=utf-8";
+                    context.Response.Headers.ContentSecurityPolicy = "frame-ancestors 'self'";
                     context.Response.Headers.CacheControl = "no-store";
                     await resources.ServeAsync(context, "packages/webui/login.html");
                     return;
@@ -395,6 +396,7 @@ internal sealed class HttpServer
                         ? html.Replace("<head>", "<head>" + marker)
                         : marker + html;
                     context.Response.ContentType = "text/html; charset=utf-8";
+                    context.Response.Headers.ContentSecurityPolicy = "frame-ancestors 'self'";
                     context.Response.Headers.CacheControl = "no-store";
                     await context.Response.WriteAsync(html, context.RequestAborted);
                     return;
