@@ -50,6 +50,19 @@ public sealed class CatalogStarvationTests
     }
 
     [Fact]
+    public async Task ConcurrentFullListQueriesCompleteWithTheDefaultStatementCap()
+    {
+        using var fixture = PostgresCatalogFixture.Open();
+        var catalog = new PgSessionCatalog(fixture.Tenant);
+        catalog.Upsert(Enumerable.Range(0,80).Select(i => SessionCatalogTests.Row("row"+i,i)));
+        await WithCappedPoolAsync(async () =>
+        {
+            var results = await Task.WhenAll(Enumerable.Range(0,80).Select(_ => catalog.QueryAsync(() => catalog.List().Length)));
+            Assert.All(results, count => Assert.Equal(80,count));
+        });
+    }
+
+    [Fact]
     public async Task ABurstOfPresentationChangesCompletesOnACappedPool()
     {
         using var temp = new TempDirectory();
