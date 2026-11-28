@@ -9,6 +9,45 @@ namespace Foxwarm.Tests.Hosted;
 public sealed class PlacementRequestTests
 {
     [Fact]
+    public void RebalanceWaitsForAContinuousIdlePreferenceWithinOneResidentEpoch()
+    {
+        var cooldown = TimeSpan.FromSeconds(60);
+        var preference = new Foxwarm.Hosted.Runtimes.RebalancePreference(cooldown);
+        var second = System.Diagnostics.Stopwatch.Frequency;
+        Assert.False(preference.IsStable(1,4,"a",0));
+        Assert.False(preference.IsStable(1,4,"a",59*second));
+        Assert.False(preference.IsStable(1,4,"b",59*second));
+        Assert.False(preference.IsStable(1,4,"a",60*second));
+        preference.Forget(1); // No eligible alternative or no longer idle.
+        Assert.False(preference.IsStable(1,4,"a",120*second));
+        Assert.True(preference.IsStable(1,4,"a",180*second));
+        Assert.False(preference.IsStable(1,5,"a",181*second));
+        preference.KeepResidents([]);
+        Assert.False(preference.IsStable(1,5,"a",250*second));
+    }
+
+    [Fact]
+    public async Task OneMovePreservesTheSettledOccurrenceAndExcludesTheSourceUntilTheNextGrant()
+    {
+        await using var test = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
+        var app = test.OpenApp();
+        await test.RegisterBootsAsync("old", "new");
+        var lease = new TenantLease(app,PostgresServer.Tenant,2);
+        var grant = Assert.IsType<LeaseGrant>(await lease.TryAcquireAsync("old",TimeSpan.FromSeconds(30),TimeSpan.FromSeconds(1),default));
+        await test.ExecuteOwnerAsync("UPDATE tenant_leases SET requested_action='move',draining_since=clock_timestamp() WHERE state='active'");
+        Assert.True(await lease.RenewAsync(grant,TimeSpan.FromSeconds(30),default));
+        var data = new System.Text.Json.Nodes.JsonObject { ["scheduledAt"] = 97 };
+        Assert.True(await lease.ReleaseWithWakeupAsync(grant,new(DateTimeOffset.UtcNow.AddHours(1),data),default));
+        var wakeup = Assert.IsType<WakeupRow>(await lease.ReadWakeupAsync(grant.TenantId,default));
+        Assert.True(wakeup.DueAt < DateTimeOffset.UtcNow.AddMinutes(1));
+        Assert.Equal(97,wakeup.Occurrence!["scheduledAt"]!.GetValue<int>());
+        Assert.Null(await lease.TryAcquireAsync("old",TimeSpan.FromSeconds(30),TimeSpan.FromSeconds(1),default));
+        var next = Assert.IsType<LeaseGrant>(await lease.TryAcquireAsync("new",TimeSpan.FromSeconds(30),TimeSpan.FromSeconds(1),default));
+        await lease.ReleaseAsync(next,default);
+        Assert.NotNull(await lease.TryAcquireAsync("old",TimeSpan.FromSeconds(30),TimeSpan.FromSeconds(1),default));
+    }
+
+    [Fact]
     public async Task OperatorRequestsNameTheOriginalTenantAndGrantAndAreIdempotent()
     {
         var pg = await PostgresServer.SharedAsync();

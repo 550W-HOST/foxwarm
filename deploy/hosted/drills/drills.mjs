@@ -321,8 +321,7 @@ export async function partition(env, context) {
 }
 
 /**
- * Rolling update from version N to N+1 with maxSurge 1 and maxUnavailable 0, as the Helm
- * Deployment's strategy does it: start a replica of N+1, wait until it is Ready (a standby is
+ * Rolling update from version N to N+1 with a spare slot in the process/Compose environment: start a replica of N+1, wait until it is Ready (a standby is
  * Ready, C3), stop one of N, repeat. The tenant stays served, one owner at a time; a graceful
  * stop releases the lease, so no step waits for the TTL (D-hosted-replica-lifecycle).
  */

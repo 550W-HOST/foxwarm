@@ -21,6 +21,8 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
 
     internal void Drain() => Volatile.Write(ref draining, 1);
 
+    internal void EndHoldsAfter(TimeSpan bound) => stopping.CancelAfter(bound);
+
     private Task<TenantRouteState?> ReadAsync(string slug, CancellationToken token)
     {
         lock (gate)
@@ -213,7 +215,12 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
     private async Task<IReadOnlyList<ReplicaRow>> CandidatesAsync(string slug, TenantRouteState state, CancellationToken token)
     {
         var live = await registry.LiveAsync(timings.Ttl, token).ConfigureAwait(false);
-        return Placement.Candidates(slug, state.Profile, state.Pin, live);
+        var candidates = Placement.Candidates(slug, state.Profile, state.Pin, live, row => row.ReaderVersion >= state.ReaderFloor);
+        if (state.ExcludedBoot is null) return candidates;
+        var alternatives = candidates.Where(row => row.Replica != state.ExcludedBoot && row.MeshAddress != null).ToArray();
+        if (alternatives.Length != 0) return alternatives;
+        // The last alternative disappeared after hand-back. Lift just this epoch’s exclusion.
+        return await directory.CancelUnavailableMoveAsync(state, token).ConfigureAwait(false) ? candidates : [];
     }
 
     private async Task<DispatchRoute?> ActivateAsync(string slug, TenantRouteState state, string host, CancellationToken token)

@@ -87,7 +87,7 @@ scratch:
 # Above the replica's 8 s fencing drain bound and a stopping owner's graceful stop (its Sessions
 # drain, then at most 2 s for HTTP requests, then the lease is released). A SIGKILL before the
 # release would leave the standby waiting for the lease to expire, a whole TTL (30 s).
-terminationGracePeriodSeconds: 60
+terminationGracePeriodSeconds: 45
 
 podDisruptionBudget:
   enabled: true

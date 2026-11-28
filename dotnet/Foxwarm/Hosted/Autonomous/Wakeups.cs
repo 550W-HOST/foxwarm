@@ -101,6 +101,9 @@ internal sealed class Wakeups(
         }
     }
 
+    private readonly System.Threading.Channels.Channel<bool> signals = System.Threading.Channels.Channel.CreateBounded<bool>(1);
+    internal void Signal() => signals.Writer.TryWrite(true);
+
     internal Task DrainAsync()
     {
         lock (gate) return Task.WhenAll(outstanding.Values.Select(task => task.Work));
@@ -108,14 +111,17 @@ internal sealed class Wakeups(
 
     internal async Task RunAsync(CancellationToken token)
     {
-        using var timer = new PeriodicTimer(Interval);
         try
         {
-            do
+            while (!token.IsCancellationRequested)
             {
                 try { await DiscoverAsync(token).ConfigureAwait(false); }
                 catch (Exception error) when (!token.IsCancellationRequested) { log("[hosted] Wake-up scan failed: " + error.Message); }
-            } while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false));
+                using var wait = CancellationTokenSource.CreateLinkedTokenSource(token);
+                wait.CancelAfter(Interval);
+                try { await signals.Reader.ReadAsync(wait.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         finally { await DrainAsync().ConfigureAwait(false); }

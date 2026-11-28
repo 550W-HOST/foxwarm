@@ -59,6 +59,34 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
         (int)(await replica.StatusAsync())["tenants"]!;
 
     [Fact]
+    public async Task RebalanceMovesOnlyIdleResidentsAfterThePreferredNameHasStayedStable()
+    {
+        var slugs = Enumerable.Range(0,100).Select(i => "rebalance"+i)
+            .Where(slug => Placement.Score(slug,"replica-b") > Placement.Score(slug,"replica-a")).Take(2).ToArray();
+        await using var harness = await ReplicaProcessHarness.CreateAsync();
+        foreach (var slug in slugs) await harness.AddTenantAsync(slug);
+        var source = await harness.StartAsync("replica-a");
+        foreach (var slug in slugs) Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(source,slug));
+        var original = await harness.OwnerAsync(slugs[0]);
+        using var socket = new System.Net.WebSockets.ClientWebSocket();
+        socket.Options.SetRequestHeader("Host", slugs[1]+".test");
+        socket.Options.SetRequestHeader("Authorization", "Bearer "+await harness.SignInTokenAsync(slugs[1]));
+        await socket.ConnectAsync(new Uri($"ws://127.0.0.1:{source.FrontPort}/api/webui/stream"),default);
+        var preference = Stopwatch.StartNew();
+        var target = await harness.StartAsync("replica-b");
+        while (await harness.OwnerAsync(slugs[0]) == original)
+        {
+            Assert.True(preference.Elapsed < TimeSpan.FromSeconds(90), "Idle resident never moved to its preferred name.");
+            await Task.Delay(200);
+        }
+        Assert.True(preference.Elapsed >= TimeSpan.FromSeconds(60), "The resident left before its placement cooldown.");
+        Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(target,slugs[0]));
+        Assert.Equal("replica-b", ReplicaRegistry.LogicalName((await harness.OwnerAsync(slugs[0]))!));
+        Assert.Equal(original,await harness.OwnerAsync(slugs[1]));
+        socket.Abort();
+    }
+
+    [Fact]
     public async Task ReplicasServeTheirTenantsAndAKilledReplicasTenantMovesOnlyAfterExpiry()
     {
         await using var harness = await ReplicaProcessHarness.CreateAsync();
@@ -108,17 +136,22 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
             Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(a, "beta"));
             Assert.Equal(2, await TenantsAsync(a));
             var b = await harness.StartAsync("replica-b");
+            var old = new Dictionary<string,ReplicaProcessHarness.LeaseRow>();
+            foreach (var tenant in new[] { "alpha", "beta" }) old[tenant] = await harness.LeaseRowAsync(tenant);
             var stopped = Stopwatch.StartNew();
             a.Terminate();
             Assert.Equal(HostedExit.Stopped, await a.ExitAsync(TimeSpan.FromSeconds(30)));
-            foreach (var tenant in new[] { "alpha", "beta" })
+            foreach (var (slug, previous) in old)
             {
-                var row = await harness.LeaseRowAsync(tenant);
-                Assert.Equal("released", row.State);
-                Assert.True(row.ExpiresAt <= row.Now);
+                // A release notification can activate B before A finishes exiting. Prove
+                // confirmed hand-back by observing the new epoch before the old expiry.
+                Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(b,slug));
+                var row = await harness.LeaseRowAsync(slug);
+                Assert.Equal("active",row.State);
+                Assert.Equal("replica-b",ReplicaRegistry.LogicalName(row.Owner!));
+                Assert.Equal(previous.Epoch+1,row.Epoch);
+                Assert.True(row.AcquiredAt < previous.ExpiresAt);
             }
-            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(b, "alpha"));
-            Assert.Equal(HttpStatusCode.Unauthorized, await ServeAsync(b, "beta"));
             Assert.True(stopped.Elapsed < Ttl / 2, $"took over after {stopped.Elapsed}");
         }
         finally

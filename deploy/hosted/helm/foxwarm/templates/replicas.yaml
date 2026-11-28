@@ -1,18 +1,17 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "foxwarm.fullname" . }}
   labels:
     {{- include "foxwarm.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  # A new replica becomes Ready as a standby before an old one stops; the stopping owner drains
-  # and releases the lease, and a standby takes over on the notification.
-  strategy:
+  # The ordinal stays the rendezvous name when a pod is replaced. Each process still
+  # registers a fresh boot ID; the headless service governs the pod DNS identities.
+  serviceName: {{ include "foxwarm.fullname" . }}-peers
+  podManagementPolicy: Parallel
+  updateStrategy:
     type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
   selector:
     matchLabels:
       {{- include "foxwarm.selectorLabels" . | nindent 6 }}

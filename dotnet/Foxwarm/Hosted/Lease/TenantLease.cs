@@ -266,7 +266,7 @@ internal sealed class TenantLease
                 throw new AutonomousDemandSettledException();
         }
         await using var update = new NpgsqlCommand(
-            "UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
+            "UPDATE tenant_leases l SET owner_replica = $2, requested_action = NULL, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3), draining_since = NULL"
                 + " FROM tenants t WHERE t.tenant_id = l.tenant_id AND t.name = $1"
                 + " RETURNING l.tenant_id, l.epoch, t.settings_revision, t.credential_version, t.limits->>'dbStatements'",
@@ -307,7 +307,7 @@ internal sealed class TenantLease
     {
         await using var command = new NpgsqlCommand(
             "SELECT t.state, t.min_reader_version,"
-                + " (l.state = 'released' OR l.expires_at <= now() OR l.owner_replica = $2), t.profile, t.pinned_role"
+                + " ((l.state = 'released' OR l.expires_at <= now() OR l.owner_replica = $2) AND NOT (l.requested_action IS NOT DISTINCT FROM 'move' AND l.owner_replica=$2) AND NOT EXISTS (SELECT FROM replicas r WHERE r.replica_id=$2 AND r.draining)), t.profile, t.pinned_role"
                 + " FROM tenants t JOIN tenant_leases l USING (tenant_id) WHERE t.name = $1",
             connection,
             transaction
@@ -451,7 +451,7 @@ internal sealed class TenantLease
         }
         await using var update = new NpgsqlCommand(
             "WITH marked AS (UPDATE tenants SET state = $4, agent_import_plan = COALESCE($5::jsonb, agent_import_plan) WHERE name = $1 RETURNING tenant_id)"
-                + " UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
+                + " UPDATE tenant_leases l SET owner_replica = $2, requested_action = NULL, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3)"
                 + " FROM marked WHERE l.tenant_id = marked.tenant_id RETURNING l.tenant_id, l.epoch",
             connection,
@@ -728,7 +728,7 @@ internal sealed class TenantLease
             batch.BatchCommands.Add(setting);
         }
         var command = new NpgsqlBatchCommand(
-            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL"
+            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL, requested_action = nullif(requested_action,'release')"
                 + " WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3 AND state = 'active'"
                 + " RETURNING tenant_id)"
                 + " SELECT pg_notify($4, tenant_id::text) FROM released"
@@ -753,15 +753,22 @@ internal sealed class TenantLease
     ) =>
         ReleaseUnderLeaseAsync(
             grant,
-            wakeup is null
-                ? ("SELECT foxwarm_clear_wakeup()", [])
-                : (
-                    "SELECT foxwarm_set_wakeup($1, $2)",
-                    [
-                        new NpgsqlParameter<DateTime> { TypedValue = wakeup.DueAt.UtcDateTime },
-                        Json(wakeup.Occurrence),
-                    ]
-                ),
+            (
+                // Serialize the final schedule choice with the placement request. A delayed
+                // requester must observe either this exact active epoch or its committed release.
+                """
+                WITH held AS MATERIALIZED (
+                    SELECT requested_action FROM tenant_leases WHERE tenant_id=$1 AND owner_replica=$2 AND epoch=$3
+                      AND state='active' AND expires_at>clock_timestamp() FOR NO KEY UPDATE
+                )
+                SELECT CASE WHEN requested_action='move' THEN foxwarm_set_wakeup(now(),$4::jsonb)
+                            WHEN $5::timestamptz IS NOT NULL THEN foxwarm_set_wakeup($5,$4::jsonb)
+                            ELSE foxwarm_clear_wakeup() END FROM held
+                """,
+                [PgTx.Parameter(grant.TenantId), PgTx.Parameter(grant.Replica), PgTx.Parameter(grant.Epoch),
+                    Json(wakeup?.Occurrence), new NpgsqlParameter { NpgsqlDbType=NpgsqlTypes.NpgsqlDbType.TimestampTz,
+                        Value=(object?)wakeup?.DueAt.UtcDateTime ?? DBNull.Value }]
+            ),
             token
         );
 
@@ -839,7 +846,7 @@ internal sealed class TenantLease
             return false;
         }
         await using var release = new NpgsqlCommand(
-            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL"
+            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL, requested_action = nullif(requested_action,'release')"
                 + " WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3 AND state = 'active'"
                 + " AND expires_at > now() RETURNING tenant_id)"
                 + " SELECT pg_notify($4, tenant_id::text) FROM released",

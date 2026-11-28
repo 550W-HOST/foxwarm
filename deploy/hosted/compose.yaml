@@ -27,7 +27,7 @@ x-replica: &replica
     - /scratch:uid=1000,gid=1000,mode=0700
   networks: [frontend, backend]
   # Above the 8 s drain bound, so a stopped owner drains and releases the lease.
-  stop_grace_period: 30s
+  stop_grace_period: 45s
 
 x-replica-environment: &replica-environment
   FOXWARM_DATABASE_URL_FILE: /run/secrets/database-url

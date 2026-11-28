@@ -335,7 +335,7 @@ internal sealed class TenantActivations : IAsyncDisposable
     /// under the new eligibility. Demand meanwhile waits for the release. A stop that overruns
     /// the drain bound loses the grant instead. False when <paramref name="id"/> isn't published.
     /// </summary>
-    internal async Task<bool> RetireForPlacementAsync(GenerationId id, string reason)
+    internal async Task<bool> RetireForPlacementAsync(GenerationId id, string reason, TimeSpan? moveGrace = null, bool idleOnly = false)
     {
         Slot slot;
         TenantGeneration generation;
@@ -345,7 +345,11 @@ internal sealed class TenantActivations : IAsyncDisposable
             if (disposed || !slots.TryGetValue(id.Tenant, out slot!) || slot.Current?.Id != id || slot.Releasing is not null)
                 return false;
             generation = slot.Current;
-            generation.Gate.Latch(AdmissionLatch.Stop);
+            if (idleOnly)
+            {
+                if (!generation.Gate.TryLatchIdle(TimeSpan.Zero, () => generation.Runtime!.Idle)) return false;
+            }
+            else generation.Gate.Latch(moveGrace.HasValue ? AdmissionLatch.Drain : AdmissionLatch.Stop);
             slot.Current = null;
             slot.Retiring = generation;
             slot.Releasing = done.Task;
@@ -353,8 +357,9 @@ internal sealed class TenantActivations : IAsyncDisposable
         var outcome = IdleReleaseOutcome.Aborted;
         try
         {
-            var stopped = generation.RetireWithWakeupAsync(CancellationToken.None);
-            if (await Task.WhenAny(stopped, Task.Delay(supervisor.DrainBound, CancellationToken.None)).ConfigureAwait(false) != stopped)
+            using var bound = new CancellationTokenSource(moveGrace is { } gracePeriod ? gracePeriod + ShutdownBound : Timeout.InfiniteTimeSpan);
+            var stopped = generation.RetireWithWakeupAsync(bound.Token, moveGrace is { } grace ? GraceEnd(grace) : null);
+            if (await Task.WhenAny(stopped, Task.Delay((moveGrace ?? TimeSpan.Zero) + supervisor.DrainBound, CancellationToken.None)).ConfigureAwait(false) != stopped)
             {
                 renewer.Lose(generation.Handle, $"{reason}; its runtime didn't stop within the drain bound.");
                 await generation.Supervision.ConfigureAwait(false);
@@ -364,7 +369,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                 return true;
             var pending = TakeStoppedGrant(slot, generation);
             if (pending is not null)
-                await HandBackAsync(slot.Lease, pending, generation, CancellationToken.None).ConfigureAwait(false);
+                await HandBackAsync(slot.Lease, pending, generation, bound.Token).ConfigureAwait(false);
             outcome = IdleReleaseOutcome.Released;
             return true;
         }
@@ -760,16 +765,20 @@ internal sealed class TenantActivations : IAsyncDisposable
     /// At the bound, every tenant whose stop isn't confirmed loses its grant unreleased (its
     /// supervised fence then decides the process's end). True when every stop was confirmed.
     /// </summary>
-    internal Task<bool> ShutdownAsync()
+    private static long GraceEnd(TimeSpan duration) => System.Diagnostics.Stopwatch.GetTimestamp() + (long)(duration.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+
+    internal Task<bool> ShutdownAsync(Func<CancellationToken, Task>? markDraining = null, TimeSpan? moveGrace = null)
     {
         lock (gate)
-            return shutdown ??= Task.Run(ShutdownCoreAsync);
+            return shutdown ??= Task.Run(() => ShutdownCoreAsync(markDraining, moveGrace));
     }
 
-    private async Task<bool> ShutdownCoreAsync()
+    private async Task<bool> ShutdownCoreAsync(Func<CancellationToken, Task>? markDraining, TimeSpan? moveGrace)
     {
         // The one deadline: every stop and every release runs under it, and nothing starts after it.
-        using var bound = new CancellationTokenSource(ShutdownBound);
+        using var bound = new CancellationTokenSource(ShutdownBound + (moveGrace ?? TimeSpan.Zero));
+        var graceEnds = moveGrace is { } grace ? GraceEnd(grace) : (long?)null;
+        var marked = markDraining is null ? null : Task.Run(() => markDraining(bound.Token));
         List<(Slot Slot, TenantGeneration Generation)> generations = [];
         List<(TenantLease Lease, PendingRelease Pending)> idle = [];
         List<Task> activations = [];
@@ -781,10 +790,10 @@ internal sealed class TenantActivations : IAsyncDisposable
             {
                 if (slot.Current is { } current)
                 {
-                    current.Gate.Latch(AdmissionLatch.Stop);
+                    current.Gate.Latch(markDraining is null ? AdmissionLatch.Stop : AdmissionLatch.Drain);
                     slot.Retiring = current;
                     slot.Current = null;
-                    _ = current.RetireWithWakeupAsync(bound.Token);
+                    _ = current.RetireWithWakeupAsync(bound.Token, graceEnds, marked);
                 }
                 foreach (var generation in new[] { slot.Retiring, slot.Building }.OfType<TenantGeneration>().Distinct())
                     generations.Add((slot, generation));

@@ -129,12 +129,12 @@ Open `http://localhost:3001` and sign in with the token. On first sign-in, Setup
 helm install foxwarm deploy/hosted/helm/foxwarm \
   --set image.repository=registry.example.com/foxwarm --set image.tag=<tag> \
   -f my-values.yaml
-kubectl exec deploy/foxwarm -- /app/Foxwarm hosted token
+kubectl exec statefulset/foxwarm -- /app/Foxwarm hosted token
 ```
 
 - **Values.** `deployment` holds the deployment configuration keys; the chart adds the listener, `health.port` and the S3 credential paths from `ports` and the mounted Secret. `secrets` supplies the runtime URL, the key-encryption key and the S3 credentials, or `secrets.existingSecret` names a Secret with the keys `database-url`, `kek.json`, `s3-access-key-id` and `s3-secret-access-key`. The chart never generates a key-encryption key.
 - **Migrations.** A `pre-install`/`pre-upgrade` hook Job runs `db migrate` with `migrate.databaseUrl` (or `migrate.existingSecret`, key `migrate-database-url`).
-- **Rollout.** Two replicas, `maxSurge: 1` and `maxUnavailable: 0`, `/readyz` and `/livez` probes on the health port, a 60 s termination grace period and a PodDisruptionBudget with `minAvailable: 1`.
+- **Rollout.** Two general replicas in a StatefulSet with stable ordinal pod names, rolling replacement, `/readyz` and `/livez` probes on the health port, a 45 s termination grace period and a PodDisruptionBudget with `minAvailable: 1`.
 
 ## Upgrades
 

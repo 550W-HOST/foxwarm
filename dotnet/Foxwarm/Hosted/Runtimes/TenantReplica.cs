@@ -39,7 +39,9 @@ internal sealed record TenantReplicaOptions(
     internal string Role { get; init; } = ReplicaRoles.General;
 
     /// <summary>The graceful shutdown's one absolute bound for every tenant.</summary>
-    internal TimeSpan ShutdownBound { get; init; } = TimeSpan.FromSeconds(8);
+    internal TimeSpan ShutdownBound { get; init; } = TimeSpan.FromSeconds(12);
+    internal TimeSpan MoveGrace { get; init; } = TimeSpan.FromSeconds(20);
+    internal TimeSpan RebalanceCooldown { get; init; } = TimeSpan.FromSeconds(60);
 
     /// <summary>How long a tenant must have admitted nothing before its idle release.</summary>
     internal TimeSpan IdleAfter { get; init; } = TimeSpan.FromMinutes(10);
@@ -179,11 +181,11 @@ internal sealed class TenantReplica
         var registry = new ReplicaRegistry(control);
         var hostnames = new HostnameDirectory(app);
         using var router = new TenantRouter(Replica, new MeshAuthentication(options.Mesh.Secret, Replica),
-            new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, () =>
-            {
-                var owners = Foxwarm.Limits.ReplicaLimits.Process.HotOwners;
-                return owners.UsedBytes < owners.Limit;
-            }, log);
+            new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, AcceptingNew, log);
+        var placement = new PlacementMaintenance(app, Replica, options, coordinator, router, () =>
+        {
+            if (state == "serving") state = "draining";
+        }, log);
         await using var health = options.HealthEndpoint is { } healthAddress
             ? new HealthEndpoint(healthAddress, () => new TenantReplicaHealth(state, Replica, options.Role, coordinator.Published().Count))
             : null;
@@ -202,10 +204,11 @@ internal sealed class TenantReplica
             registered = true;
             renewer.Start();
             loops.Add(HeartbeatAsync(registry, background.Token));
-            loops.Add(ListenAsync(hostnames, background.Token));
+            loops.Add(placement.RunAsync(background.Token));
             loops.Add(IdleScanAsync(coordinator, background.Token));
             var wakeups = new Autonomous.Wakeups(app, options.Timings.Ttl, options.Role, options.ReaderVersion, router.MayStartAutonomousAsync,
                 (slug, cause, token) => coordinator.ActivateAsync(slug, cause, token), log);
+            loops.Add(ListenAsync(hostnames, placement.Signal, wakeups.Signal, background.Token));
             loops.Add(wakeups.RunAsync(background.Token));
             await hostnames.RefreshAsync(stop).ConfigureAwait(false);
             loops.Add(RefreshHostnamesAsync(hostnames, background.Token));
@@ -221,9 +224,12 @@ internal sealed class TenantReplica
             state = "stopping";
             router.Drain();
             // Tenants first: each refuses new dispatch as it latches, and the front answers.
-            confirmed = await coordinator.ShutdownAsync().ConfigureAwait(false);
-            using var frontStop = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await front.StopAsync(frontStop.Token).ConfigureAwait(false);
+            using var stopListeners = new CancellationTokenSource(options.ShutdownBound + options.MoveGrace);
+            router.EndHoldsAfter(options.ShutdownBound + options.MoveGrace);
+            confirmed = await coordinator.ShutdownAsync(placement.MarkStoppingAsync, options.MoveGrace).ConfigureAwait(false);
+            try { await Task.WhenAll(front.StopAsync(stopListeners.Token), mesh.StopAsync(stopListeners.Token)).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (stopListeners.IsCancellationRequested) { }
+
         }
         catch (Npgsql.NpgsqlException error) when (!registered)
         {
@@ -338,6 +344,12 @@ internal sealed class TenantReplica
             }
     }
 
+    private static bool AcceptingNew()
+    {
+        var owners = Foxwarm.Limits.ReplicaLimits.Process.HotOwners;
+        return owners.UsedBytes < owners.Limit;
+    }
+
     private async Task HeartbeatAsync(ReplicaRegistry registry, CancellationToken token)
     {
         while (!token.IsCancellationRequested)
@@ -361,7 +373,7 @@ internal sealed class TenantReplica
                             ["busy"] = owners.Count(owner => owner.Entry.WithState(state => state.Busy)),
                         };
                     }
-                await registry.HeartbeatAsync(Replica, bound.Token, counts.ToJsonString()).ConfigureAwait(false);
+                await registry.HeartbeatAsync(Replica, bound.Token, counts.ToJsonString(), AcceptingNew()).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -396,7 +408,7 @@ internal sealed class TenantReplica
 
     // LISTEN on its own connection. Every (re)subscription invalidates as a notification does:
     // a change made while the connection was down sent no notification this replica received.
-    private async Task ListenAsync(HostnameDirectory hostnames, CancellationToken token)
+    private async Task ListenAsync(HostnameDirectory hostnames, Action placementSignal, Action wakeupSignal, CancellationToken token)
     {
         var delay = TimeSpan.FromMilliseconds(200);
         while (!token.IsCancellationRequested)
@@ -408,17 +420,20 @@ internal sealed class TenantReplica
                     .ConfigureAwait(false);
                 connection.Notification += (_, notification) =>
                 {
-                    if (notification.Channel == "foxwarm_operator")
+                    if (notification.Channel == TenantLease.Channel) wakeupSignal();
+                    else if (notification.Channel == "foxwarm_operator")
                         _ = Task.Run(InvalidateOperatorDocuments);
                     else if (notification.Channel == "foxwarm_tenants")
                     {
                         hostnames.Invalidate();
+                        placementSignal();
                         CheckPlacement();
                     }
                 };
-                await using (var listen = new Npgsql.NpgsqlCommand("LISTEN foxwarm_operator; LISTEN foxwarm_tenants", connection))
+                await using (var listen = new Npgsql.NpgsqlCommand($"LISTEN foxwarm_operator; LISTEN foxwarm_tenants; LISTEN {TenantLease.Channel}", connection))
                     await listen.ExecuteNonQueryAsync(token).ConfigureAwait(false);
                 hostnames.Invalidate();
+                placementSignal();
                 InvalidateOperatorDocuments();
                 CheckPlacement();
                 delay = TimeSpan.FromMilliseconds(200);
@@ -559,6 +574,7 @@ internal sealed class TenantReplica
         internal void OperatorDocumentsChanged() => _ = changes.Notify();
 
         public bool Idle => wakeups?.Idle == true;
+        public bool WorkInProgress => runtime is MainHostRuntime main && main.Host.Sessions.HasDrainWork;
 
         public Task StopProducersAsync(CancellationToken token) => wakeups?.StopProducersAsync() ?? Task.CompletedTask;
 
@@ -660,7 +676,9 @@ internal sealed class TenantReplica
     {
         public bool Live => true;
 
-        public bool Ready => State == "serving";
+        // Administrative drain stops new ownership, not public forwarding. A targetless
+        // resident must remain reachable through the ordinary Ready service endpoints.
+        public bool Ready => State is "serving" or "draining";
 
         public string ToJson() =>
             new JsonObject

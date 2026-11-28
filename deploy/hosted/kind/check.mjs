@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The Helm chart on Kubernetes: a kind cluster with PostgreSQL and VersityGW (fixtures.yaml),
 // the chart installed from values.yaml, then:
-//   - the migration hook completed before the Deployment created any replica;
+//   - the migration hook completed before the StatefulSet created any replica;
 //   - the readiness and liveness probes: both replicas Ready (the standby included), none
 //     restarted, /readyz and /livez answer 200;
 //   - one owner and one standby; the owner pod is deleted, the standby takes over at a higher
@@ -214,13 +214,11 @@ try {
   const at = event => time(event.lastTimestamp || event.eventTime || event.firstTimestamp)
   const completed = events.find(event => event.involvedObject.kind === 'Job' && event.involvedObject.name === `${release}-migrate` && event.reason === 'Completed')
   assert(completed, 'the migration Job ran and completed')
-  // The chart's ReplicaSets only, not the fixtures'. Event times have a resolution of one
-  // second, so the same second counts as in order.
-  const replicaSets = new Set((await json(['get', 'replicasets', '-l', 'app.kubernetes.io/instance=' + release])).items.map(set => set.metadata.name))
-  const created = events.filter(event => event.involvedObject.kind === 'ReplicaSet' && replicaSets.has(event.involvedObject.name) && event.reason === 'SuccessfulCreate')
-  assert(created.length > 0, 'the Deployment created replicas')
-  const deployment = await json(['get', 'deployment', release])
-  assert(time(deployment.metadata.creationTimestamp) >= Math.floor(at(completed) / 1000) * 1000, 'the Deployment was created after the migration hook completed')
+  // A StatefulSet creates its ordinal pods directly. Event times have one-second precision.
+  const created = events.filter(event => event.involvedObject.kind === 'StatefulSet' && event.involvedObject.name === release && event.reason === 'SuccessfulCreate')
+  assert(created.length > 0, 'the StatefulSet created replicas')
+  const replicas = await json(['get', 'statefulset', release])
+  assert(time(replicas.metadata.creationTimestamp) >= Math.floor(at(completed) / 1000) * 1000, 'the StatefulSet was created after the migration hook completed')
   const firstReplica = Math.min(...created.map(at))
   assert(at(completed) <= firstReplica, 'the migration hook completed before the first replica was created')
   assert((await json(['get', 'jobs'])).items.length === 0, 'the succeeded hook Job was deleted')
@@ -248,6 +246,7 @@ try {
     assert((await health(name, '/readyz')) !== null, `${name} answers /readyz with 200`)
     assert((await health(name, '/livez')) !== null, `${name} answers /livez with 200`)
   }
+  const originalPodUid = pods.find(pod => pod.metadata.name === roles.owner.pod).metadata.uid
   const before = await lease()
   assert(before.owner === roles.owner.replica && before.epoch === roles.owner.epoch, 'the lease names the owner pod')
   log(`probes: ${roles.owner.pod} owns at epoch ${before.epoch}, ${roles.standby.pod} stands by; both Ready, no restarts`)
@@ -283,10 +282,10 @@ try {
   }, 'the standby owns the tenant at a higher epoch', 90000, 250)
   const takeoverMs = Date.now() - deletedAt
   assert(next.pod === roles.standby.pod, 'the standby took over')
-  await until(async () => !(await replicaPods()).some(pod => pod.metadata.name === roles.owner.pod), 'the deleted pod is gone', 90000, 500)
+  await until(async () => !(await replicaPods()).some(pod => pod.metadata.uid === originalPodUid), 'the deleted pod UID is gone', 90000, 500)
   const replacement = await until(async () => {
     const rows = await statuses()
-    const standby = rows.find(row => row.role === 'standby' && row.ready && row.pod !== roles.owner.pod)
+    const standby = rows.find(row => row.role === 'standby' && row.ready && row.pod === roles.owner.pod && row.replica !== roles.owner.replica)
     return rows.length === 2 && standby ? standby : null
   }, 'the replacement pod stands by', 120000, 500)
   const served = await probing

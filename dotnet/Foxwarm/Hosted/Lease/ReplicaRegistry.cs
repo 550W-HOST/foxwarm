@@ -94,17 +94,18 @@ internal sealed class ReplicaRegistry
         return separator > 0 ? replica[..separator] : replica;
     }
 
-    internal async Task HeartbeatAsync(string replica, CancellationToken token, string? tenantCounts = null)
+    internal async Task HeartbeatAsync(string replica, CancellationToken token, string? tenantCounts = null, bool? acceptingNew = null)
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "UPDATE replicas SET heartbeat_at = now(), capacity = CASE WHEN $2::text IS NULL THEN capacity"
-                + " ELSE capacity || jsonb_build_object('tenants',$2::jsonb,'version',$3::text) END WHERE replica_id = $1",
+            "UPDATE replicas SET heartbeat_at = now(), capacity = (CASE WHEN $2::text IS NULL THEN capacity"
+                + " ELSE capacity || jsonb_build_object('tenants',$2::jsonb,'version',$3::text) END) || (CASE WHEN $4::boolean IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('acceptingNew',$4::boolean) END) WHERE replica_id = $1",
             connection
         );
         command.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
         command.Parameters.Add(PgTx.Parameter(tenantCounts));
         command.Parameters.Add(PgTx.Parameter(ProductVersion.Value));
+        command.Parameters.Add(PgTx.Parameter(acceptingNew));
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
 
