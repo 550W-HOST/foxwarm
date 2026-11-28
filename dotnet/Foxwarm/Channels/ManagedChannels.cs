@@ -77,6 +77,14 @@ internal sealed class ManagedChannels(
         configuration.CurrentChannels()[id] as JsonObject
         ?? throw new ChannelRequestException("Channel is not configured: " + id);
 
+    internal bool HasLiveTransport
+    {
+        get { lock (gate) return running.Count != 0 || starting.Count != 0 || initialStarts.Count != 0; }
+    }
+
+    internal bool ConfiguredPoller => configuration.CurrentChannels().Any(entry =>
+        entry.Value is JsonObject settings && Eligible(entry.Key, settings) && Type(entry.Key, settings) is "telegram" or "matrix" or "weixin");
+
     internal JsonArray Statuses(bool webUiRunning = false)
     {
         var entries = configuration.CurrentChannels();
