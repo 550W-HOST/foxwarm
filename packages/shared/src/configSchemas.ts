@@ -701,7 +701,7 @@ export const APP_CONFIG_SCHEMA = {
             inputMessages: { type: 'boolean', default: false },
             outputMessages: { type: 'boolean', default: false },
             toolDefinitions: { type: 'boolean', default: false },
-            toolArguments: { type: 'boolean', default: false, description: 'Include eligible arguments after tool authorization.' },
+            toolArguments: { type: 'boolean', default: false, description: 'Include arguments of authorized tool calls.' },
             toolResults: { type: 'boolean', default: false },
             reasoning: { type: 'boolean', default: false, description: 'Include reasoning in the input or output messages selected above.' },
           },

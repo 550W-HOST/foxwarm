@@ -25,13 +25,13 @@ Set individual `otlp.captureContent` switches to `true`. All seven default to `f
 
 | Switch | Content |
 |---|---|
-| `systemPrompt` | System and developer instructions from the prepared request |
-| `inputMessages` | Input messages as sent to the provider, newest first when selecting a bounded history |
-| `outputMessages` | Assistant output from the provider, including committed segments, before any private placeholders are restored |
+| `systemPrompt` | System and developer instructions |
+| `inputMessages` | Model input and conversation history as sent to the provider. Long history keeps the newest records that fit. |
+| `outputMessages` | Assistant output as the provider returned it, including committed segments. With text redaction, placeholders stay unrestored. |
 | `toolDefinitions` | Tool descriptions and parameters in the request |
-| `toolArguments` | Arguments on authorized execution spans. Known secrets are masked; `add_secret.value`, executable wrapper bodies, and arguments without a safe provider representation are omitted. Message spans contain tool-call names and IDs only. |
-| `toolResults` | Processed tool responses. For a text-redacted model, results are available in captured provider input when `inputMessages` is also on; the local execution result is omitted. |
-| `reasoning` | Reasoning in selected input or output messages. Both message classes remain off unless explicitly enabled. |
+| `toolArguments` | Arguments of authorized calls, on their execution spans. Known secret values are masked and `add_secret` values are left out. The source and input data of `run_script`, `continue_script` and `run_skill` are left out. With text redaction, only arguments as the model proposed them are exported, never restored values. Message spans carry only tool-call names and IDs. |
+| `toolResults` | Processed tool results. With text redaction, results appear only in the captured model input, so turn on `inputMessages` as well. |
+| `reasoning` | Reasoning in the input or output messages selected above. |
 
 Content is sampled from a bounded number of parts and limited to 16 KiB per attribute before SDK serialization. Large values and unrecognized parts can be shortened or omitted. Main batches spans in memory and allows up to five seconds to drain them at shutdown. A full queue drops spans.
 
