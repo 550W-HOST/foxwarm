@@ -8,6 +8,27 @@ public sealed partial class AsrRoutesTests
     private const int StreamMessageLimit = 100 * 1024 * 1024;
 
     [Fact]
+    public async Task MultipleSmallMessagesCannotBuildAnUnboundedHandshakeBacklog()
+    {
+        await using var f = await Fixture.Create();
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var upstreamReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.BeforeStream = async context =>
+        {
+            waiting.TrySetResult();
+            try { await Task.Delay(Timeout.Infinite, context.RequestAborted); }
+            finally { upstreamReleased.TrySetResult(); }
+        };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var client = await f.Connect();
+        await waiting.Task.WaitAsync(deadline.Token);
+        var bytes = new byte[8192];
+        for (var i = 0; i < 129; ++i)
+            await client.SendAsync(bytes.AsMemory(), WebSocketMessageType.Binary, true, deadline.Token);
+        await Task.WhenAll(upstreamReleased.Task, f.StreamCompleted.Task).WaitAsync(deadline.Token);
+    }
+
+    [Fact]
     public async Task Oversized_browser_message_cancels_a_pending_upstream_handshake()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));

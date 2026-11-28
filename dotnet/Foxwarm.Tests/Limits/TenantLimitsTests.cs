@@ -234,11 +234,11 @@ public sealed class TenantLimitsTests
     }
 
     [Fact]
-    public void ResizingFollowsAnOwnersHistoryWithoutWaiting()
+    public async Task ResizingFollowsAnOwnersHistoryWithoutWaiting()
     {
         var owners = new Owners();
         using var budget = new HotOwnerBudget(100, null, owners);
-        var charge = budget.Force(10);
+        var charge = await budget.ReserveAsync(10);
         charge.Resize(500);
         Assert.Equal(500, budget.UsedBytes);
         charge.Resize(20);

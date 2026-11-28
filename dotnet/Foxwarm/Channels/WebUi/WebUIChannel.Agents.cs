@@ -497,11 +497,11 @@ internal sealed partial class WebUIChannel
             "/api/sessions",
             async (HttpRequest request) =>
             {
+                string? parentId = null;
                 try
                 {
                     var body = await ReadOptionalObjectAsync(request, "Session creation must be an object.");
                     SessionOwner hosted;
-                    string? parentId = null;
                     if (body is null || body.Count == 0)
                         hosted = await sessions.CreateAsync();
                     else
@@ -573,28 +573,11 @@ internal sealed partial class WebUIChannel
                                 runtime: runtimeSelection
                             );
                     }
-                    await runtime.ChangePresentationAsync(catalog =>
-                        catalog.MoveAsync(
-                            hosted.Id,
-                            new JsonObject
-                            {
-                                ["parentSessionId"] = parentId,
-                                ["position"] = "first",
-                            }
-                        )
-                    );
-                    return Results.Ok(
-                        JsonData.WebNode(
-                            parentId is null
-                                ? new JsonObject { ["success"] = true, ["sessionId"] = hosted.Id }
-                                : new JsonObject
-                                {
-                                    ["success"] = true,
-                                    ["sessionId"] = hosted.Id,
-                                    ["parentSessionId"] = parentId,
-                                }
-                        )
-                    );
+                    return await Created(hosted.Id);
+                }
+                catch (CommittedSessionCreationException error) when (error.SessionId is { } id && error.InnerException is Foxwarm.Limits.TenantLimitException { Limit: "hotOwnerBytes" })
+                {
+                    return await Created(id);
                 }
                 catch (CommittedSessionCreationException error)
                 {
@@ -626,6 +609,31 @@ internal sealed partial class WebUIChannel
                 catch (Exception error)
                 {
                     return Results.Problem(error.Message, statusCode: 500);
+                }
+                async Task<IResult> Created(string id)
+                {
+                    await runtime.ChangePresentationAsync(catalog =>
+                        catalog.MoveAsync(
+                            id,
+                            new JsonObject
+                            {
+                                ["parentSessionId"] = parentId,
+                                ["position"] = "first",
+                            }
+                        )
+                    );
+                    return Results.Ok(
+                        JsonData.WebNode(
+                            parentId is null
+                                ? new JsonObject { ["success"] = true, ["sessionId"] = id }
+                                : new JsonObject
+                                {
+                                    ["success"] = true,
+                                    ["sessionId"] = id,
+                                    ["parentSessionId"] = parentId,
+                                }
+                        )
+                    );
                 }
             }
         );

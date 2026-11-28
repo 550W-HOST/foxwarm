@@ -37,6 +37,7 @@ internal sealed partial class MainToolScript
             }
         }
         MontyWorker? worker = null;
+        IDisposable? workerSlot = null;
         IDisposable? processSlot = null;
         var stdout = new ToolScriptStdout(Text(record["stdout"]) ?? "");
         var offset = stdout.Count;
@@ -113,7 +114,10 @@ internal sealed partial class MainToolScript
                 processSlot = await admit(run.Token);
                 context.Owner.Entry.RequireIdentityAuthority();
             }
+            if (AdmitWorker is { } enterWorker)
+                workerSlot = await enterWorker(context.Nested, run.Token);
             worker = new MontyWorker(binary);
+            WorkerStarted?.Invoke(worker.Pid);
             WorkerEvent progress;
             ToolScriptDataBudget progressBudget;
             DateTimeOffset? sleepUntil = null;
@@ -510,6 +514,7 @@ internal sealed partial class MainToolScript
             }
             finally
             {
+                workerSlot?.Dispose();
                 processSlot?.Dispose();
                 active.TryRemove(id, out _);
                 run.Dispose();

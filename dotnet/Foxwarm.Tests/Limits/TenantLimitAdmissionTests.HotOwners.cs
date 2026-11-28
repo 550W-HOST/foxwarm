@@ -13,6 +13,41 @@ public sealed partial class TenantLimitAdmissionTests
     // Two empty owners don't fit; one does.
     private static long OneOwner => HotOwnerBudget.Estimate(0) * 3 / 2;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ContinuedCreationKeepsCommittedSessionsColdWhenOwnersArePinned(bool fork)
+    {
+        var cap = HotOwnerBudget.Estimate(0) * 2 + 65536;
+        await using var f = await Fixture.Create(Limits with { HotOwnerBytes = cap });
+        var first = await f.Manager.CreateNamedAsync("main", "first", null, null);
+        var second = await f.Manager.CreateNamedAsync("main", "second", null, null);
+        using var one = f.Manager.TryUseOwner(first);
+        using var two = f.Manager.TryUseOwner(second);
+        for (int n = 0; n < 2; n++)
+        {
+            var name = "cold" + n;
+            string id;
+            using (HotOwnerBudget.WithoutWaiting())
+            {
+                var error = await Assert.ThrowsAsync<CommittedSessionCreationException>(() => fork
+                    ? f.Manager.ForkAsync(first, name)
+                    : f.Manager.CreateNamedAsync("main", name, null, null));
+                id = Assert.IsType<string>(error.SessionId);
+                Assert.IsType<TenantLimitException>(error.InnerException);
+            }
+            Assert.NotNull(f.Manager.Catalog.Get(id));
+            Assert.False(Resident(f.Manager, id));
+            Assert.InRange(f.Manager.Admission!.HotOwners.UsedBytes, 1, cap);
+        }
+        one!.Dispose();
+        two!.Dispose();
+        f.Manager.IdleReleaseDelay = TimeSpan.Zero;
+        Assert.Equal(2, f.Manager.ReleaseIdleOwners());
+        var expected = fork ? "first_cold1" : "cold1";
+        Assert.Equal(expected, (await f.Manager.RequiredAsync(expected)).Id);
+    }
+
     [Fact]
     public async Task ACommandReplyPinsTheResidentEmitterWithoutHydratingAColdOwner()
     {
@@ -186,7 +221,7 @@ public sealed partial class TenantLimitAdmissionTests
     {
         var releaser = new FakeReleaser();
         using var budget = new HotOwnerBudget(100, null, releaser, TimeSpan.FromSeconds(20));
-        var resident = budget.Force(80);
+        var resident = await budget.ReserveAsync(80);
         var waiting = budget.ReserveAsync(50);
         await Task.Delay(150);
         Assert.False(waiting.IsCompleted);
@@ -208,13 +243,13 @@ public sealed partial class TenantLimitAdmissionTests
         // Every release reports success but frees nothing.
         var releaser = new FakeReleaser { Idle = 1, Release = () => true };
         using var budget = new HotOwnerBudget(100, null, releaser, TimeSpan.FromMilliseconds(200));
-        using var resident = budget.Force(80);
+        using var resident = await budget.ReserveAsync(80);
         var exhausted = await Assert.ThrowsAsync<TenantLimitException>(() =>
             Task.Run(() => budget.ReserveAsync(50)).WaitAsync(TimeSpan.FromSeconds(10))
         );
         Assert.Equal("hotOwnerBytes", exhausted.Limit);
         using var patient = new HotOwnerBudget(100, null, releaser, TimeSpan.FromSeconds(30));
-        using var held = patient.Force(80);
+        using var held = await patient.ReserveAsync(80);
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             Task.Run(() => patient.ReserveAsync(50, cancel.Token)).WaitAsync(TimeSpan.FromSeconds(10))
@@ -229,8 +264,8 @@ public sealed partial class TenantLimitAdmissionTests
         var other = new FakeReleaser { Idle = 1, Release = () => true };
         using var tenant = new HotOwnerBudget(100, pool, own, TimeSpan.FromMilliseconds(200));
         using var neighbour = new HotOwnerBudget(100, pool, other);
-        using var resident = tenant.Force(80);
-        using var neighbours = neighbour.Force(40);
+        using var resident = await tenant.ReserveAsync(80);
+        using var neighbours = await neighbour.ReserveAsync(40);
         // Over its own budget and the replica's: releasing the neighbour can't make room.
         await Assert.ThrowsAsync<TenantLimitException>(() =>
             Task.Run(() => tenant.ReserveAsync(50)).WaitAsync(TimeSpan.FromSeconds(10))
@@ -255,12 +290,18 @@ public sealed partial class TenantLimitAdmissionTests
         f.Manager.IdleReleaseDelay = TimeSpan.Zero;
         var sweep = Task.Run(() => f.Manager.ReleaseIdleOwners());
         Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
-        // A created owner is admitted while the sweep holds its gate.
-        var created = await Task.Run(() => f.Manager.CreateNamedAsync("main", "b", null, null))
-            .WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(Resident(f.Manager, created.Id));
-        gate.Set();
+        // Publication cannot evict the owner until the sweep finishes. The new
+        // Session is durable and cold; its caller joins normal load admission.
+        var created = Task.Run(() => f.Manager.CreateNamedAsync("main", "b", null, null));
+        try
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (f.Manager.Catalog.Get("b") is null) await Task.Delay(10, deadline.Token);
+            Assert.False(Resident(f.Manager, "b"));
+        }
+        finally { gate.Set(); }
         await sweep.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("b", (await created.WaitAsync(TimeSpan.FromSeconds(5))).Id);
     }
 
     [Fact]

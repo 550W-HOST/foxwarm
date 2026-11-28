@@ -40,11 +40,20 @@ internal sealed partial class AsrProxy
         );
         // As in Source, accept browser messages while the upstream handshake is pending.
         // The receive owner remains active so browser closure also cancels that handshake.
-        var pending = Channel.CreateUnbounded<StreamFragment>(
-            new UnboundedChannelOptions { SingleReader = true, SingleWriter = true }
-        );
+        // At most 128 x 8 KiB queued, plus one fragment at each socket. Fixed slots
+        // also bound empty fragments. Apply backpressure during the handshake as well.
+        var pending = Channel.CreateBounded<StreamFragment>(new BoundedChannelOptions(128)
+            { SingleReader = true, SingleWriter = true });
         using var downstreamWrites = new SemaphoreSlim(1);
         using var upstreamWrites = new SemaphoreSlim(1);
+        var connected = Foxwarm.Net.EgressHttp.ConnectWebSocketAsync(
+            egress,
+            Foxwarm.Net.EgressPurpose.Deployment,
+            upstream,
+            endpoint.Uri,
+            http,
+            lifetime.Token
+        );
         async Task ReceiveClient()
         {
             var buffer = new byte[8192];
@@ -57,22 +66,18 @@ internal sealed partial class AsrProxy
                 messageBytes += frame.Count;
                 if (messageBytes > StreamMessageLimit)
                     throw new WebSocketException("ASR message exceeds the transport limit");
-                pending.Writer.TryWrite(
-                    new(frame.MessageType, buffer[..frame.Count], frame.EndOfMessage)
-                );
+                var fragment = new StreamFragment(frame.MessageType, buffer[..frame.Count], frame.EndOfMessage);
+                if (!pending.Writer.TryWrite(fragment))
+                {
+                    using var waiting = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                    waiting.CancelAfter(TimeSpan.FromSeconds(5));
+                    await pending.Writer.WriteAsync(fragment, waiting.Token);
+                }
                 if (frame.EndOfMessage)
                     messageBytes = 0;
             }
         }
         var fromClient = ReceiveClient();
-        var connected = Foxwarm.Net.EgressHttp.ConnectWebSocketAsync(
-            egress,
-            Foxwarm.Net.EgressPurpose.Deployment,
-            upstream,
-            endpoint.Uri,
-            http,
-            lifetime.Token
-        );
         async Task SendToService()
         {
             await connected;

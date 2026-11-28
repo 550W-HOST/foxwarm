@@ -12,6 +12,8 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     /// <summary>
     /// Admission of one Monty process (the tenant's ToolScript limit); null admits at once.
     /// </summary>
+    internal Func<bool, CancellationToken, ValueTask<IDisposable>>? AdmitWorker { get; set; }
+    internal Action<int>? WorkerStarted { get; set; }
     internal Func<CancellationToken, ValueTask<IDisposable>>? AdmitProcess { get; set; }
 
     // Runs after a worker's disposal; a test makes that disposal fail.

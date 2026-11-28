@@ -52,6 +52,15 @@ internal sealed class AdmissionSlots
         return new Lease(this, outer);
     }
 
+    internal IDisposable? TryEnter()
+    {
+        if (!slots.Wait(0)) return null;
+        var outer = parent?.TryEnter();
+        if (parent is null || outer is not null) return new Lease(this, outer);
+        slots.Release();
+        return null;
+    }
+
     private sealed class Lease(AdmissionSlots owner, IDisposable? outer) : IDisposable
     {
         private int released;

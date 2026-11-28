@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
+using Foxwarm.Limits;
 using Foxwarm.Sessions;
 
 namespace Foxwarm.Sessions;
@@ -822,7 +823,23 @@ internal sealed partial class SessionManager
             slot =
                 identities.GetValueOrDefault(session.Id)
                 ?? throw new InvalidOperationException("Creation identity was not claimed.");
-        var charge = ChargeCreatedOwner(session);
+        HotOwnerBudget.Charge? charge = null;
+        if (Admission is { } admission)
+        {
+            try
+            {
+                using var immediate = HotOwnerBudget.WithoutWaiting();
+                charge = await admission.HotOwners.ReserveAsync(HotOwnerBudget.Estimate(
+                    HistoryJsonBytes(session.Entry.WithState(state => state.History.Snapshot()))));
+            }
+            catch (TenantLimitException)
+            {
+                await session.Entry.SaveLane.RetireAsync(session.AuthorityStore.Retire);
+                slot.CreatedCold = true;
+                TopologyChanged?.Invoke();
+                return;
+            }
+        }
         try
         {
             PublishOwner(session, slot, charge: charge);

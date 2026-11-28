@@ -155,11 +155,13 @@ internal sealed class ReplicaLimits
     {
         HotOwners = new HotOwnerPool(hotOwnerBytes);
         ToolScripts = new AdmissionSlots(toolScriptRuns);
+        Workers = new AdmissionSlots(toolScriptRuns);
     }
 
     internal HotOwnerPool HotOwners { get; }
 
     internal AdmissionSlots ToolScripts { get; }
+    internal AdmissionSlots Workers { get; }
 
     private static readonly Lazy<ReplicaLimits> process = new(() =>
         new ReplicaLimits((long)(ContainerMemory() * HotOwnerShare))

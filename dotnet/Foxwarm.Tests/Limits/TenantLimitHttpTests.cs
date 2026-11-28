@@ -83,6 +83,19 @@ public sealed class TenantLimitHttpTests
     }
 
     [Fact]
+    public async Task WebUiReturnsTheCommittedSessionWhenItsOwnerCannotBeAdmitted()
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults with { HotOwnerBytes = HotOwnerBudget.Estimate(0) });
+        using var pin = await f.Manager.UseRequiredAsync("uploads");
+        using var response = await f.Client.PostAsJsonAsync("api/sessions", new { sessionId = "durable" });
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.Equal("durable", (string?)result!["sessionId"]);
+        Assert.NotNull(f.Manager.Catalog.Get("durable"));
+        Assert.Null(f.Manager.Find("durable"));
+    }
+
+    [Fact]
     public async Task SessionSseAndWebSocketsShareTheLifetimeLimit()
     {
         await using var f = await Fixture.Create(TenantLimits.Defaults with { WebSockets = 1 });

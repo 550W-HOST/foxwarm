@@ -18,6 +18,7 @@ internal sealed class TenantAdmission : IDisposable
         HotOwners = new HotOwnerBudget(limits.HotOwnerBytes, replica.HotOwners, owners);
         Turns = new AdmissionSlots(limits.BusyTurns);
         ToolScripts = new AdmissionSlots(limits.ToolScriptRuns, replica.ToolScripts);
+        Workers = new AdmissionSlots(Math.Max(2, limits.ToolScriptRuns), replica.Workers);
         NodeExecs = new AdmissionSlots(limits.NodeExecs);
         Hydrations = new AdmissionSlots(HydrationSlots);
         Requests = new RequestRate(limits.RequestsPerSecond, limits.RequestBurst, clock);
@@ -34,6 +35,7 @@ internal sealed class TenantAdmission : IDisposable
 
     /// <summary>ToolScript runs at once, within the replica's slots; more queue.</summary>
     internal AdmissionSlots ToolScripts { get; }
+    internal AdmissionSlots Workers { get; }
 
     /// <summary>
     /// Tool calls in flight to resident Nodes through Main (<c>NodeConnectionHub.ExecuteAsync</c>);

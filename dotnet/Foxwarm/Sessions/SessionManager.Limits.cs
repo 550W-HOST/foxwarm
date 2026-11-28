@@ -67,12 +67,6 @@ internal sealed partial class SessionManager
     private bool OwnsHotCharge(HotOwnerBudget.Charge charge) =>
         hotCharges is not null && hotCharges.Values.Any(held => ReferenceEquals(held, charge));
 
-    // A created owner exists already: it is charged without waiting.
-    private HotOwnerBudget.Charge? ChargeCreatedOwner(SessionOwner owner) =>
-        Admission?.HotOwners.Force(
-            HotOwnerBudget.Estimate(HistoryJsonBytes(owner.Entry.WithState(state => state.History.Snapshot())))
-        );
-
     private void RecordHotCharge(SessionOwner owner, HotOwnerBudget.Charge? charge)
     {
         if (charge is not null && (admissionDisposed || !hotCharges!.TryAdd(owner, charge)))

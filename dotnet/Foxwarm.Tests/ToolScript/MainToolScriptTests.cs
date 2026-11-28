@@ -24,7 +24,8 @@ public sealed class MainToolScriptTests
 
         internal static async Task<Fixture> Create(
             string? skillsRoot = null,
-            ResponsesClientOptions? suppliedOptions = null
+            ResponsesClientOptions? suppliedOptions = null, Foxwarm.Limits.TenantLimits? limits = null,
+            Foxwarm.Limits.ReplicaLimits? replica = null
         )
         {
             var f = new Fixture();
@@ -44,7 +45,8 @@ public sealed class MainToolScriptTests
                 // Cases write state/tool-authorization.yaml; with every Session store hosted,
                 // nothing else creates the state directory.
                 Directory.CreateDirectory(Path.Combine(f.Data, "state"));
-                f.Manager = new(f.Data, f.Work, options, HostModels.ForTest(options), skillsRoot);
+                f.Manager = new(f.Data, f.Work, options, HostModels.ForTest(options), skillsRoot,
+                    capabilities: RuntimeCapabilities.File with { Limits = limits }) { ReplicaLimits = replica };
                 await f.Manager.LoadMainHostAsync();
                 f.Owner = await f.Manager.CreateNamedAsync("main", "script", null, null);
                 f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;

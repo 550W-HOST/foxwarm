@@ -36,7 +36,7 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
         await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options),
             capabilities: RuntimeCapabilities.File with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { HotOwnerBytes = 450000 } })
         { PressureGraceForTest = TimeSpan.Zero, IdleReleaseDelay = TimeSpan.Zero };
-        using var pinned = deferred ? manager.Admission!.HotOwners.Force(450000) : null;
+        using var pinned = deferred ? await manager.Admission!.HotOwners.ReserveAsync(450000) : null;
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(8));
         var retired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         manager.OwnerLookupReturned = owner =>
@@ -119,7 +119,7 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
         Assert.True(large > small);
         await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options),
             capabilities: RuntimeCapabilities.File with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { HotOwnerBytes = large + small } });
-        using var pinned = manager.Admission!.HotOwners.Force(large + small);
+        using var pinned = await manager.Admission!.HotOwners.ReserveAsync(large + small);
         await manager.LoadAsync().WaitAsync(TimeSpan.FromSeconds(4));
         Assert.Empty(manager.Owners());
         pinned.Resize(large); // Room for the smaller persisted owner, still too little for the first.
@@ -154,7 +154,7 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
                 await Task.Delay(25, deadline.Token);
             await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options),
                 capabilities: RuntimeCapabilities.File with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { HotOwnerBytes = 400000 } });
-            using var pinned = manager.Admission!.HotOwners.Force(400000);
+            using var pinned = await manager.Admission!.HotOwners.ReserveAsync(400000);
             await manager.LoadMainHostAsync().WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Empty(manager.Owners());
             pinned.Dispose();
