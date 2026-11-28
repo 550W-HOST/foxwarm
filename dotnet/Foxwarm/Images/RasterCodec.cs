@@ -23,7 +23,7 @@ internal static class RasterCodec
     {
         using var data = SKData.CreateCopy(bytes);
         using var codec =
-            SKCodec.Create(data) ?? throw new ImageInputException("Image raster is invalid.");
+            SKCodec.Create(data) ?? throw new ImageInputException("Image raster is invalid.") { InvalidRaster = true };
         var mime = codec.EncodedFormat switch
         {
             SKEncodedImageFormat.Png => "image/png",
@@ -33,11 +33,11 @@ internal static class RasterCodec
             _ => "application/octet-stream",
         };
         if (mime != declaredMime)
-            throw new ImageInputException("Image bytes do not match the declared MIME type.");
+            throw new ImageInputException("Image bytes do not match the declared MIME type.") { InvalidRaster = true };
         if (enforcePixelLimit)
             ValidatePixels(codec.Info.Width, codec.Info.Height);
         else if (codec.Info.Width <= 0 || codec.Info.Height <= 0)
-            throw new ImageInputException("Image has invalid dimensions.");
+            throw new ImageInputException("Image has invalid dimensions.") { InvalidRaster = true };
         return new(codec.Info.Width, codec.Info.Height, mime, codec.EncodedOrigin);
     }
 

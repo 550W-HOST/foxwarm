@@ -33,10 +33,9 @@ internal sealed partial class MessageRouter
             {
                 owner = await runtime.Manager.ProvisionChannelGuestAsync(source);
             }
-            catch (Exception error)
+            catch (Exception error) when (!source.Polled || error is GuestPolicyDenied)
             {
                 Console.Error.WriteLine("Channel guest provisioning failed: " + error.Message);
-                if (source.Polled) throw;
             }
             if (owner is null && !Authorization(source).Authorized)
             {

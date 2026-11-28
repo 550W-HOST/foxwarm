@@ -23,6 +23,7 @@ internal sealed class TelegramChannel : IManagedChannel
 {
     private readonly string id;
     private readonly SessionManager sessions;
+    private readonly PolledMedia mediaAttempts = new();
     private readonly MessageRouter router;
     private readonly HttpClient http;
     private readonly Foxwarm.Net.EgressPolicy egress;
@@ -191,6 +192,7 @@ internal sealed class TelegramChannel : IManagedChannel
                     throw;
                 }
                 health.Recover(PollingPath);
+                var handled = true;
                 foreach (var update in updates.OfType<JsonObject>())
                 {
                     var next = SessionWait.Number(update["update_id"]) is { } updateId ? checked((long)updateId + 1) : offset;
@@ -200,19 +202,27 @@ internal sealed class TelegramChannel : IManagedChannel
                     if (gate is not null && admission is null) return;
                     try
                     {
-                        await HandleUpdateAsync(update);
+                        try { await HandleUpdateAsync(update); }
+                        catch (Exception error) when (PolledMedia.Rejected(error))
+                        {
+                            health.Log(error.InnerException ?? error);
+                        }
                         if (next != offset && cursors is not null)
                             await cursors.SaveAsync(id, account, new JsonObject { ["offset"] = next });
                         offset = next;
+                        mediaAttempts.Checkpointed();
                     }
                     catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
                     catch (Exception error)
                     {
-                        health.Log(error);
+                        handled = false;
+                        if (error is ChannelMediaFetchFailure fetch) health.Log(fetch.InnerException!);
+                        else health.InputPaused("Telegram", error);
                         await delay(TimeSpan.FromSeconds(2), stopping.Token);
                         break; // Retry from the last durably handled update.
                     }
                 }
+                if (handled) health.Recover("Telegram input");
             }
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
@@ -299,13 +309,9 @@ internal sealed class TelegramChannel : IManagedChannel
             return;
         }
         var deliveryToken = sessions.ScheduledProducers is null ? stopping.Token : cursors?.Closing ?? default;
-        JsonNode? file;
-        try { file = await ApiAsync("getFile", new JsonObject { ["file_id"] = fileId }, deliveryToken); }
-        catch (TelegramApiException error) when (error.Code is 400 or 403 or 404 or 410 or 413)
-        {
-            health.Log(error);
-            return;
-        }
+        var eventId = context.Receipt ?? update["update_id"]?.ToString() ?? fileId;
+        var file = await mediaAttempts.FetchAsync(eventId,
+            () => ApiAsync("getFile", new JsonObject { ["file_id"] = fileId }, deliveryToken), deliveryToken);
         if (SessionWait.Text(file?["file_path"]) is not { Length: > 0 } filePath)
         {
             health.Log(new InvalidDataException("Telegram file has no download path."));
@@ -324,24 +330,10 @@ internal sealed class TelegramChannel : IManagedChannel
         var mime = photo is not null
             ? "image/jpeg"
             : SessionWait.Text(media["mime_type"]) ?? "application/octet-stream";
-        ExternalChannelMessage incoming;
-        try
-        {
-            incoming = await sessions.ReceiveRemoteChannelFileAsync(
-                "telegram",
-                chat,
-                Download,
-                name,
-                mime,
-                SessionWait.Text(message["caption"]) ?? "",
-                deliveryToken
-            );
-        }
-        catch (Exception error) when (ChannelFailure.RejectedMedia(error))
-        {
-            health.Log(error);
-            return;
-        }
+        var incoming = await sessions.ReceiveRemoteChannelFileAsync(
+            "telegram", chat, () => mediaAttempts.FetchAsync(eventId, Download, deliveryToken),
+            name, mime, SessionWait.Text(message["caption"]) ?? "", deliveryToken
+        );
         await router.HandleExternalMessageAsync(context, incoming);
     }
 

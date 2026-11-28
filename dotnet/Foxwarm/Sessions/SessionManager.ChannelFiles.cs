@@ -53,24 +53,26 @@ internal sealed partial class SessionManager
         string descriptor;
         if (Capabilities.Limits is not null && bytes.LongLength > ReceivedFileLimit)
             return UnkeptStoredFile(filename, mime, caption, bytes.LongLength, OversizedReason(ReceivedFileLimit));
+        var polled = platform is "matrix" or "telegram";
+        long? generation = null;
+        string? path = null;
         if (!Capabilities.MasterNode)
         {
             if (AgentStore is null)
                 return await UnkeptChannelFileAsync(bytes, filename, mime, caption, image, token);
-            string stored;
             try
             {
-                stored = await SaveStoredChannelFileAsync(agent, relative, bytes, token);
+                generation = await CreateStoredChannelFileAsync(agent, relative, bytes, token);
             }
             catch (AgentStoreQuotaException error)
             {
                 return UnkeptStoredFile(filename, mime, caption, bytes.LongLength, error.Message);
             }
-            descriptor = ChannelFileNames.Descriptor(filename, stored, mime, AgentStorePaths.Endpoint, image);
+            descriptor = ChannelFileNames.Descriptor(filename, AgentFolderPaths.Variable + "/" + relative, mime, AgentStorePaths.Endpoint, image);
         }
         else
         {
-            var path = Path.Combine(AgentDirectory(agent), relative);
+            path = Path.Combine(AgentDirectory(agent), relative);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             if (!await FileToolWrite.WriteBytesAtomic(path, bytes, false, () => { }, token))
                 throw new IOException("Inbound file already exists.");
@@ -86,7 +88,19 @@ internal sealed partial class SessionManager
             },
         };
         if (image)
-            parts.Add(await SavedChannelImagePartAsync(bytes, mime, token));
+        {
+            try { parts.Add(await SavedChannelImagePartAsync(bytes, mime, token)); }
+            catch when (polled)
+            {
+                // Materialization failed before admission: this attempt's newly created file
+                // has no Session reference. Never delete a replacement Agent-store generation.
+                if (generation is { } created)
+                    await AgentStore!.DeleteAsync(agent, relative, false, created, CancellationToken.None);
+                else if (path is not null)
+                    File.Delete(path);
+                throw;
+            }
+        }
         return parts;
     }
 
@@ -122,15 +136,20 @@ internal sealed partial class SessionManager
     // A received file in the Agent store, written once; the folder path the model reads it by.
     internal async Task<string> SaveStoredChannelFileAsync(string agent, string relative, byte[] bytes, CancellationToken token)
     {
+        await CreateStoredChannelFileAsync(agent, relative, bytes, token);
+        return AgentFolderPaths.Variable + "/" + relative;
+    }
+
+    private async Task<long> CreateStoredChannelFileAsync(string agent, string relative, byte[] bytes, CancellationToken token)
+    {
         try
         {
-            await AgentStore!.WriteAsync(agent, relative, bytes, 0, token);
+            return await AgentStore!.WriteAsync(agent, relative, bytes, 0, token);
         }
         catch (AgentFileConflictException)
         {
             throw new IOException("Inbound file already exists.");
         }
-        return AgentFolderPaths.Variable + "/" + relative;
     }
 
     // A received file the Agent store can't keep (over its per-file limit, or the store is
