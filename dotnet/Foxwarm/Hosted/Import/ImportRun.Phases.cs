@@ -217,6 +217,7 @@ internal sealed partial class ImportRun
         await StepAsync("configuration documents", ImportConfigurationAsync);
         await StepAsync("node registry and tokens", ImportNodes);
         await StepAsync("channel bindings", () => CopyDocument(StateDocumentName.Channels, "state/channels.json"));
+        await StepAsync("channel cursors", () => CopyDocument(StateDocumentName.ChannelCursors, "state/channel-cursors.json"));
         await StepAsync("blobs and artifacts", ImportBlobsAsync);
     }
 
