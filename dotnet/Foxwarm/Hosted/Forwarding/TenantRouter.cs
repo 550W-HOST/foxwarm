@@ -9,7 +9,7 @@ namespace Foxwarm.Hosted.Forwarding;
 /// <summary>The public edge resolves and retries. A mesh receiver either dispatches locally or declines.</summary>
 internal sealed class TenantRouter(string boot, MeshAuthentication authentication, RouteDirectory directory,
     ReplicaRegistry registry, TenantActivations activations, HostnameDirectory hosts, LeaseTimings timings,
-    Func<TenantGeneration, HttpContext, Task> dispatch, Func<bool> hasCapacity, Action<string> log) : IDisposable
+    Func<TenantGeneration, HttpContext, Task> dispatch, Func<bool> hasCapacity, Action<string> log, CancellationToken processStop) : IDisposable
 {
     private readonly SemaphoreSlim queue = new(2048);
     private readonly SemaphoreSlim buffers = new(2048);
@@ -17,9 +17,8 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
     private readonly object gate = new();
     private readonly Dictionary<string, Task<TenantRouteState?>> reads = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource stopping = new();
-    private int draining;
 
-    internal void Drain() => Volatile.Write(ref draining, 1);
+    internal void EndHoldsAfter(TimeSpan bound) => stopping.CancelAfter(bound);
 
     private Task<TenantRouteState?> ReadAsync(string slug, CancellationToken token)
     {
@@ -202,7 +201,7 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
     /// The caller activates with its original cause. A current lease always wins.</summary>
     internal async Task<bool> MayStartAutonomousAsync(string slug, bool graceElapsed, CancellationToken token)
     {
-        if (Volatile.Read(ref draining) != 0 || !hasCapacity()) return false;
+        if (processStop.IsCancellationRequested || !hasCapacity()) return false;
         var state = await ReadAsync(slug, token).ConfigureAwait(false);
         if (state is not { Available: true, Owner: null }) return false;
         var candidates = await CandidatesAsync(slug, state, token).ConfigureAwait(false);
@@ -213,7 +212,12 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
     private async Task<IReadOnlyList<ReplicaRow>> CandidatesAsync(string slug, TenantRouteState state, CancellationToken token)
     {
         var live = await registry.LiveAsync(timings.Ttl, token).ConfigureAwait(false);
-        return Placement.Candidates(slug, state.Profile, state.Pin, live);
+        var candidates = Placement.Candidates(slug, state.Profile, state.Pin, live, row => row.ReaderVersion >= state.ReaderFloor && (row.Replica == boot || row.MeshAddress != null));
+        if (state.ExcludedBoot is null) return candidates;
+        var alternatives = candidates.Where(row => row.Replica != state.ExcludedBoot && row.MeshAddress != null).ToArray();
+        if (alternatives.Length != 0) return alternatives;
+        // The last alternative disappeared after hand-back. Lift just this epoch’s exclusion.
+        return await directory.CancelUnavailableMoveAsync(state, token).ConfigureAwait(false) ? candidates : [];
     }
 
     private async Task<DispatchRoute?> ActivateAsync(string slug, TenantRouteState state, string host, CancellationToken token)
@@ -245,7 +249,7 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
         return null;
     }
 
-    private bool MayActivate(string slug) => Volatile.Read(ref draining) == 0 && (activations.Current(slug) is not null || hasCapacity());
+    private bool MayActivate(string slug) => !processStop.IsCancellationRequested && (activations.Current(slug) is not null || hasCapacity());
 
     private void LogActivation(string slug, Exception error)
     {

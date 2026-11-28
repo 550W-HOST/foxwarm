@@ -169,12 +169,13 @@ public sealed partial class TenantReplicaTests
         var registry = new ReplicaRegistry(database);
         var second = Enumerable.Range(0, 100).Select(i => "other-" + i)
             .First(name => Placement.Score(slug, name) > Placement.Score(slug, "replica-a"));
-        await registry.RegisterAsync(second + "/1", null, 1, 2, default);
+        await registry.RegisterAsync(second + "/1", null, 1, 2, default, meshAddress: "127.0.0.1:1");
         var local = cluster.Replica.Replica;
         var capacity = true;
+        using var stopping = new CancellationTokenSource();
         using var router = new TenantRouter(local, new MeshAuthentication(cluster.MeshKey, local), new RouteDirectory(database),
             registry, cluster.Replica.Activations!, new HostnameDirectory(database), Fast,
-            (_, _) => throw new NotSupportedException(), () => capacity, _ => { });
+            (_, _) => throw new NotSupportedException(), () => capacity, _ => { }, stopping.Token);
         Assert.False(await router.MayStartAutonomousAsync(slug, false, default));
         Assert.True(await router.MayStartAutonomousAsync(slug, true, default));
         capacity = false;
@@ -189,7 +190,7 @@ public sealed partial class TenantReplicaTests
         Assert.False(await router.MayStartAutonomousAsync(slug, true, default));
         await cluster.Database.ExecuteOwnerAsync("UPDATE tenant_leases SET state='released' WHERE owner_replica='elsewhere/1'");
         Assert.True(await router.MayStartAutonomousAsync(slug, true, default));
-        router.Drain();
+        stopping.Cancel();
         Assert.False(await router.MayStartAutonomousAsync(slug, true, default));
     }
 

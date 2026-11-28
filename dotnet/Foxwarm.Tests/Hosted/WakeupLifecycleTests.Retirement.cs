@@ -23,7 +23,7 @@ public sealed partial class WakeupLifecycleTests
         private Task serving = null!;
         internal string Slug => PostgresServer.Tenant;
         internal TenantActivations Generations => Replica.Activations!;
-        internal static async Task<LiveReplica> StartAsync(bool master = false)
+        internal static async Task<LiveReplica> StartAsync(bool master = false, bool shortIdle = false)
         {
             var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
             await db.ExecuteOwnerAsync("INSERT INTO tenant_hostnames(hostname,tenant_id,kind) SELECT name || '.test',tenant_id,'primary' FROM tenants ON CONFLICT DO NOTHING");
@@ -35,6 +35,8 @@ public sealed partial class WakeupLifecycleTests
             var replica = new TenantReplica(new TenantReplicaOptions("schedule-tests",null,null,new IPEndPoint(IPAddress.Loopback,0),
                 slug => $"http://{slug}.test", timings, TimeSpan.FromSeconds(4), 2)
             { Role = master ? ReplicaRoles.MasterHost : ReplicaRoles.General,
+                IdleAfter = shortIdle ? TimeSpan.FromSeconds(2) : TimeSpan.FromMinutes(10),
+                IdleScan = shortIdle ? TimeSpan.FromMilliseconds(350) : TimeSpan.FromSeconds(30),
                 Mesh = new(new(IPAddress.Loopback,0),"127.0.0.1",System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)) },
                 db.OpenApp(), db.AppConnectionString, async (context,ct) =>
                 {

@@ -65,6 +65,9 @@ for values in "$chart"/ci/*-values.yaml; do
   name="$(basename "$values" .yaml)"
   helm lint "$chart" --strict -f "$values" >/dev/null
   helm template foxwarm "$chart" -f "$values" > "$work/$name.yaml"
+  helm template foxwarm "$chart" -f "$values" --show-only templates/replicas.yaml > "$work/replicas.yaml"
+  grep -qx 'kind: StatefulSet' "$work/replicas.yaml"
+  grep -qx '  serviceName: foxwarm-peers' "$work/replicas.yaml"
   kubeconform -strict -summary -kubernetes-version "$kubernetes" "$work/$name.yaml"
   # The ConfigMap's deployment.yaml, as a replica reads it.
   awk '/^  deployment.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/$name.deployment.yaml"
@@ -85,7 +88,7 @@ for values in "$chart"/ci/*-values.yaml; do
     awk '/^  master.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/master-config.yaml"
     parse "$work/master-config.yaml"
   else
-    ! grep -qx 'kind: StatefulSet' "$work/$name.yaml" || exit 1
+    ! grep -q '^  name: foxwarm-master$' "$work/$name.yaml" || exit 1
   fi
   echo "helm: $name renders and validates"
 done

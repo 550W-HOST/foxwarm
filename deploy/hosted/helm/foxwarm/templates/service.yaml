@@ -15,3 +15,18 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "foxwarm.fullname" . }}-peers
+  labels:
+    {{- include "foxwarm.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "foxwarm.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.ports.http }}
+      targetPort: http

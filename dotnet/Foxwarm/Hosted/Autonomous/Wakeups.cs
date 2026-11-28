@@ -37,7 +37,7 @@ internal sealed class Wakeups(
                 : [liveFor.TotalSeconds, RankGrace.TotalSeconds, BatchSize, role, readerVersion, Interval.TotalSeconds];
             await using var command = tx.Command($"""
                 WITH live AS (
-                    SELECT DISTINCT ON (coalesce(name, replica_id)) role, draining, reader_version
+                    SELECT DISTINCT ON (coalesce(name, replica_id)) role, capacity, reader_version
                     FROM replicas WHERE heartbeat_at > now() - make_interval(secs => $1)
                     ORDER BY coalesce(name, replica_id), started_at, replica_id
                 )
@@ -45,7 +45,7 @@ internal sealed class Wakeups(
                   JOIN tenants t ON t.tenant_id = l.tenant_id
                 WHERE t.state = 'active' AND {predicate} AND t.min_reader_version <= $5
                   AND (w.next_attempt_at IS NULL OR w.next_attempt_at <= now())
-                  AND EXISTS (SELECT FROM live r WHERE r.role=$4 AND NOT r.draining AND r.reader_version >= t.min_reader_version
+                  AND EXISTS (SELECT FROM live r WHERE r.role=$4 AND (r.capacity->>'stopping') IS DISTINCT FROM 'true' AND (r.capacity->>'acceptingNew') IS DISTINCT FROM 'false' AND r.reader_version >= t.min_reader_version
                     AND ((t.profile = 'hosted' AND t.pinned_role IS NULL AND r.role = 'general')
                       OR (t.profile = 'operator' AND r.role = 'master-host')))
                 ORDER BY {due}, t.tenant_id LIMIT $3
@@ -101,6 +101,9 @@ internal sealed class Wakeups(
         }
     }
 
+    private readonly System.Threading.Channels.Channel<bool> signals = System.Threading.Channels.Channel.CreateBounded<bool>(1);
+    internal void Signal() => signals.Writer.TryWrite(true);
+
     internal Task DrainAsync()
     {
         lock (gate) return Task.WhenAll(outstanding.Values.Select(task => task.Work));
@@ -108,14 +111,17 @@ internal sealed class Wakeups(
 
     internal async Task RunAsync(CancellationToken token)
     {
-        using var timer = new PeriodicTimer(Interval);
         try
         {
-            do
+            while (!token.IsCancellationRequested)
             {
                 try { await DiscoverAsync(token).ConfigureAwait(false); }
                 catch (Exception error) when (!token.IsCancellationRequested) { log("[hosted] Wake-up scan failed: " + error.Message); }
-            } while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false));
+                using var wait = CancellationTokenSource.CreateLinkedTokenSource(token);
+                wait.CancelAfter(Interval);
+                try { await signals.Reader.ReadAsync(wait.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         finally { await DrainAsync().ConfigureAwait(false); }

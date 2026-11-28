@@ -2,4 +2,4 @@ Foxwarm (hosted mode) for tenant {{ .Values.tenant }}: {{ .Values.replicaCount }
 service {{ include "foxwarm.fullname" . }}:{{ .Values.service.port }}.
 
 The sign-in token of the tenant:
-  kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "foxwarm.fullname" . }} -- /app/Foxwarm hosted token
+  kubectl exec -n {{ .Release.Namespace }} statefulset/{{ include "foxwarm.fullname" . }} -- /app/Foxwarm hosted token

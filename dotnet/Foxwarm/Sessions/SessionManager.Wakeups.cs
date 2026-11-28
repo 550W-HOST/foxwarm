@@ -32,6 +32,9 @@ internal sealed partial class SessionManager
         }
     }
 
+    internal bool HasDrainWork => !deferredRecovery.IsCompleted || ToolScript.HasActiveRuns || executor.TrackedCount != 0
+        || sessions.Values.Any(owner => owner.Processing || owner.Entry.HasProcessor || owner.Compactor.Active || owner.Entry.WithState(state => state.Busy));
+
     internal async Task StopWakeupProducersAsync()
     {
         timers.StopFuture();

@@ -21,6 +21,33 @@ public sealed partial class WakeupLifecycleTests
             .Count(message => message.ToJsonString().Contains(content, StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ManagedBusyWorkFinishesInGraceOrRecoversOnceOnTheNewGeneration(bool finishes)
+    {
+        await using var live = await LiveReplica.StartAsync();
+        using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var original = await live.Generations.ActivateAsync(live.Slug);
+        var owner = await live.Current.Host.Sessions.CreateNamedAsync("main", "moving", null, null);
+        owner.Entry.WithState(state => { state.Busy = true; state.BusyStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); });
+        await owner.Entry.SaveLane.SaveStrictAsync();
+        var retiring = live.Generations.RetireForPlacementAsync(original.Id, "move", TimeSpan.FromMilliseconds(650));
+        await EventuallyAsync(() => Task.FromResult(original.Gate.Latched == AdmissionLatch.Drain), bound.Token);
+        await Task.Delay(100,bound.Token);
+        Assert.True(live.Current.Host.Sessions.Accepting);
+        if (finishes)
+        {
+            owner.Entry.WithState(state => { state.Busy = false; state.BusyStartedAt = null; });
+            await owner.Entry.SaveLane.SaveStrictAsync();
+        }
+        Assert.True(await retiring.WaitAsync(bound.Token));
+        var next = await live.Generations.ActivateAsync(live.Slug);
+        Assert.True(next.Id.Epoch > original.Id.Epoch);
+        var restored = (await live.Current.Host.Sessions.GetExistingAsync(owner.Id))!;
+        Assert.Equal(finishes ? 0 : 1, SavedInputs(restored,"session-resumed"));
+    }
+
     [Fact]
     public async Task AFailedWaitReadCarriesTheArmedCronOverAnOlderFutureRow()
     {

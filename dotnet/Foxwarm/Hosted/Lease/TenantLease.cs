@@ -210,12 +210,13 @@ internal sealed class TenantLease
         TimeSpan ttl,
         TimeSpan lockTimeout,
         CancellationToken token,
-        TimeSpan? autonomousLead = null
+        TimeSpan? autonomousLead = null,
+        CancellationToken processStop = default
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         // Look first without a lock: a waiting FOR UPDATE would queue the owner's writers.
-        if (await EligibleAsync(connection, null, replica, token).ConfigureAwait(false) is null)
+        if (await EligibleAsync(connection, null, replica, ttl, token).ConfigureAwait(false) is null)
             return null;
         var acquisitionStart = System.Diagnostics.Stopwatch.GetTimestamp();
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
@@ -247,7 +248,7 @@ internal sealed class TenantLease
         {
             return null;
         }
-        if (await EligibleAsync(connection, transaction, replica, token).ConfigureAwait(false) is not { } profile)
+        if (await EligibleAsync(connection, transaction, replica, ttl, token).ConfigureAwait(false) is not { } profile)
             return null;
         if (autonomousLead is { } lead)
         {
@@ -265,8 +266,11 @@ internal sealed class TenantLease
             if (await demand.ExecuteScalarAsync(token).ConfigureAwait(false) is not true)
                 throw new AutonomousDemandSettledException();
         }
+        // The process can stop while this claim waits for the lease lock. Decline here
+        // without canceling any database write: once a commit starts its outcome must be known.
+        if (processStop.IsCancellationRequested) return null;
         await using var update = new NpgsqlCommand(
-            "UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
+            "UPDATE tenant_leases l SET owner_replica = $2, requested_action = NULL, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3), draining_since = NULL"
                 + " FROM tenants t WHERE t.tenant_id = l.tenant_id AND t.name = $1"
                 + " RETURNING l.tenant_id, l.epoch, t.settings_revision, t.credential_version, t.limits->>'dbStatements'",
@@ -302,13 +306,20 @@ internal sealed class TenantLease
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         string replica,
+        TimeSpan ttl,
         CancellationToken token
     )
     {
         await using var command = new NpgsqlCommand(
-            "SELECT t.state, t.min_reader_version,"
-                + " (l.state = 'released' OR l.expires_at <= now() OR l.owner_replica = $2), t.profile, t.pinned_role"
-                + " FROM tenants t JOIN tenant_leases l USING (tenant_id) WHERE t.name = $1",
+            """
+            SELECT t.state, t.min_reader_version,
+                   (l.state='released' OR l.expires_at<=now() OR l.owner_replica=$2)
+                     AND NOT (l.requested_action IS NOT DISTINCT FROM 'move' AND l.owner_replica=$2)
+                     AND (r.capacity->>'stopping') IS DISTINCT FROM 'true',
+                   t.profile, t.pinned_role, coalesce(r.draining, false)
+              FROM tenants t JOIN tenant_leases l USING (tenant_id)
+              LEFT JOIN replicas r ON r.replica_id=$2 WHERE t.name=$1
+            """,
             connection,
             transaction
         );
@@ -333,9 +344,17 @@ internal sealed class TenantLease
             throw new TenantNotEligibleException(
                 $"Tenant {Tenant} (profile {TenantProfiles.Name(profile)}{(pinned is null ? "" : ", pinned to " + pinned)}) isn't served by a {Role} replica."
             );
-        if (state != "active")
-            return null;
-        return reader.GetBoolean(2) ? profile : null;
+        if (state != "active" || !reader.GetBoolean(2)) return null;
+        if (transaction is not null && reader.GetBoolean(5))
+        {
+            // A receiver may still have an activation from an older routing snapshot. Check
+            // last-resort eligibility under the lease lock before accepting that claim.
+            await reader.CloseAsync().ConfigureAwait(false);
+            var live = await ReplicaRegistry.LiveAsync(new PgTx(connection, transaction, 0), ttl, token).ConfigureAwait(false);
+            if (!Placement.Candidates(Tenant, profile, pinned, live, r => r.ReaderVersion >= required && r.MeshAddress != null)
+                .Any(r => r.Replica == replica)) return null;
+        }
+        return profile;
     }
 
     private void RequireReader(int required)
@@ -451,7 +470,7 @@ internal sealed class TenantLease
         }
         await using var update = new NpgsqlCommand(
             "WITH marked AS (UPDATE tenants SET state = $4, agent_import_plan = COALESCE($5::jsonb, agent_import_plan) WHERE name = $1 RETURNING tenant_id)"
-                + " UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
+                + " UPDATE tenant_leases l SET owner_replica = $2, requested_action = NULL, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3)"
                 + " FROM marked WHERE l.tenant_id = marked.tenant_id RETURNING l.tenant_id, l.epoch",
             connection,
@@ -728,7 +747,7 @@ internal sealed class TenantLease
             batch.BatchCommands.Add(setting);
         }
         var command = new NpgsqlBatchCommand(
-            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL"
+            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL, requested_action = nullif(requested_action,'release')"
                 + " WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3 AND state = 'active'"
                 + " RETURNING tenant_id)"
                 + " SELECT pg_notify($4, tenant_id::text) FROM released"
@@ -749,21 +768,17 @@ internal sealed class TenantLease
     internal Task<bool> ReleaseWithWakeupAsync(
         LeaseGrant grant,
         WakeupDue? wakeup,
-        CancellationToken token
-    ) =>
-        ReleaseUnderLeaseAsync(
-            grant,
-            wakeup is null
-                ? ("SELECT foxwarm_clear_wakeup()", [])
-                : (
-                    "SELECT foxwarm_set_wakeup($1, $2)",
-                    [
-                        new NpgsqlParameter<DateTime> { TypedValue = wakeup.DueAt.UtcDateTime },
-                        Json(wakeup.Occurrence),
-                    ]
-                ),
-            token
-        );
+        CancellationToken token,
+        bool moveOnStop = false
+    ) => ReleaseUnderLeaseAsync(grant, (
+            """
+            SELECT CASE WHEN requested_action='move' THEN foxwarm_set_wakeup(now(),$2::jsonb)
+                        WHEN $3::timestamptz IS NOT NULL THEN foxwarm_set_wakeup($3,$2::jsonb)
+                        ELSE foxwarm_clear_wakeup() END FROM tenant_leases WHERE tenant_id=$1
+            """,
+            [PgTx.Parameter(grant.TenantId), Json(wakeup?.Occurrence), new NpgsqlParameter
+                { NpgsqlDbType=NpgsqlTypes.NpgsqlDbType.TimestampTz, Value=(object?)wakeup?.DueAt.UtcDateTime ?? DBNull.Value }]
+        ), token, moveOnStop);
 
     /// <summary>
     /// Releases the lease after a start that failed, recording that no replica should try
@@ -792,7 +807,7 @@ internal sealed class TenantLease
     // An unknown final schedule needs a prompt retry, even when an old row was far in the
     // future. Keep the stopped clock's nomination, or the still-unarmed row's occurrence.
     internal Task<bool> ReleaseForRecoveryAsync(LeaseGrant grant, System.Text.Json.Nodes.JsonObject? occurrence,
-        TimeSpan backoff, CancellationToken token) => ReleaseUnderLeaseAsync(grant, (
+        TimeSpan backoff, CancellationToken token, bool moveOnStop = false) => ReleaseUnderLeaseAsync(grant, (
             """
             WITH nominated AS MATERIALIZED (
                 SELECT foxwarm_set_wakeup(now(), coalesce($1, (SELECT occurrence FROM tenant_wakeups WHERE tenant_id=$2)))
@@ -800,12 +815,13 @@ internal sealed class TenantLease
             SELECT foxwarm_wakeup_backoff(now() + make_interval(secs => $3), true) FROM nominated
             """,
             [Json(occurrence), new NpgsqlParameter<int> { TypedValue = grant.TenantId },
-                new NpgsqlParameter<double> { TypedValue = backoff.TotalSeconds }]), token);
+                new NpgsqlParameter<double> { TypedValue = backoff.TotalSeconds }]), token, moveOnStop);
 
     private async Task<bool> ReleaseUnderLeaseAsync(
         LeaseGrant grant,
         (string Sql, NpgsqlParameter[] Parameters) wakeup,
-        CancellationToken token
+        CancellationToken token,
+        bool moveOnStop = false
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
@@ -828,10 +844,30 @@ internal sealed class TenantLease
                 );
                 await context.ExecuteNonQueryAsync(token).ConfigureAwait(false);
             }
+            // The first statement may wait past expiry, even if the blocker didn't change
+            // the tuple. Check the clock in a separate statement after owning the row lock.
+            var tx = new PgTx(connection, transaction, grant.TenantId);
+            await using (var takeLock = tx.Command("SELECT tenant_id FROM tenant_leases WHERE tenant_id=$1 FOR NO KEY UPDATE", grant.TenantId))
+                if (await takeLock.ExecuteScalarAsync(token).ConfigureAwait(false) is null) return false;
+            await using (var valid = tx.Command("""
+                SELECT 1 FROM tenant_leases WHERE tenant_id=$1 AND owner_replica=$2 AND epoch=$3
+                  AND state='active' AND expires_at>clock_timestamp()
+                """, grant.TenantId, grant.Replica, grant.Epoch))
+                if (await valid.ExecuteScalarAsync(token).ConfigureAwait(false) is null) return false;
+            if (moveOnStop)
+            {
+                // The bulk marker may have skipped this row. A concurrent lifecycle change
+                // or an explicit release request takes precedence over the stop's move.
+                await tx.ExecuteAsync("""
+                    UPDATE tenant_leases l SET requested_action='move' FROM tenants t
+                    WHERE l.tenant_id=$1 AND t.tenant_id=l.tenant_id AND t.state='active' AND l.requested_action IS NULL
+                    """, token, grant.TenantId).ConfigureAwait(false);
+            }
             await using (var write = new NpgsqlCommand(wakeup.Sql, connection, transaction))
             {
                 write.Parameters.AddRange(wakeup.Parameters);
-                await write.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+                await using var written = await write.ExecuteReaderAsync(token).ConfigureAwait(false);
+                if (!await written.ReadAsync(token).ConfigureAwait(false)) return false;
             }
         }
         catch (PostgresException error) when (error.SqlState == TenantDb.FenceSqlState)
@@ -839,9 +875,9 @@ internal sealed class TenantLease
             return false;
         }
         await using var release = new NpgsqlCommand(
-            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL"
+            "WITH released AS (UPDATE tenant_leases SET state = 'released', expires_at = now(), draining_since = NULL, requested_action = nullif(requested_action,'release')"
                 + " WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3 AND state = 'active'"
-                + " AND expires_at > now() RETURNING tenant_id)"
+                + " RETURNING tenant_id)"
                 + " SELECT pg_notify($4, tenant_id::text) FROM released",
             connection,
             transaction

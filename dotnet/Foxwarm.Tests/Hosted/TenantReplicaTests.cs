@@ -176,7 +176,7 @@ public sealed partial class TenantReplicaTests
             new TenantReplicaOptions(
                 name,
                 null,
-                null,
+                new IPEndPoint(IPAddress.Loopback, 0),
                 new IPEndPoint(IPAddress.Loopback, 0),
                 slug => $"http://{slug}.test",
                 timings,
@@ -185,6 +185,7 @@ public sealed partial class TenantReplicaTests
             )
             {
                 ShutdownBound = TimeSpan.FromSeconds(5),
+                MoveGrace = TimeSpan.FromMilliseconds(250),
                 Mesh = new(new(IPAddress.Loopback, 0), "127.0.0.1", key),
             },
             database.OpenApp(),
@@ -605,8 +606,9 @@ public sealed partial class TenantReplicaTests
     [Fact]
     public async Task AStopWhoseReleaseCantLockTheLeaseRowExitsFencedAndTheLeaseStays()
     {
-        await using var f = await StartAsync("alpha");
+        await using var f = await StartAsync("alpha", "sibling");
         await f.WhoAmIAsync("alpha");
+        await f.WhoAmIAsync("sibling");
         var runtime = f.Live("alpha").Single();
         var tenant = await f.Database.TenantIdAsync("alpha");
         await using var holder = new Npgsql.NpgsqlConnection(f.Database.OwnerConnectionString);
@@ -617,6 +619,7 @@ public sealed partial class TenantReplicaTests
         f.Stop.Cancel();
         Assert.Equal(HostedExit.Fenced, await f.Run.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.True(runtime.Disposed.Task.IsCompleted);
+        Assert.Equal("released",await f.Database.ScalarAsync("SELECT l.state FROM tenant_leases l JOIN tenants t USING(tenant_id) WHERE t.name='sibling'"));
         await holding.RollbackAsync();
         Assert.Equal("active", await f.Database.ScalarAsync("SELECT state FROM tenant_leases WHERE tenant_id = $1", tenant));
         Assert.StartsWith("replica-a", (string)(await f.Database.ScalarAsync("SELECT owner_replica FROM tenant_leases WHERE tenant_id = $1", tenant))!);

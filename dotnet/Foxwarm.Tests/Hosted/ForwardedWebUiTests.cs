@@ -11,6 +11,54 @@ namespace Foxwarm.Tests.Hosted;
 [Collection("Process console")]
 public sealed class ForwardedWebUiTests
 {
+    [Fact]
+    public async Task RealtimeSubscriberReconnectsThroughTheSameEdgeAndResynchronizesAfterAnOwnerMove()
+    {
+        const string slug = "moving";
+        await using var cluster = await ReplicaProcessHarness.CreateAsync();
+        await cluster.AddTenantAsync(slug);
+        var source = await cluster.StartAsync("source");
+        using (var warm = await source.GetAsync(slug)) Assert.Equal(HttpStatusCode.Unauthorized, warm.StatusCode);
+        var token = await cluster.SignInTokenAsync(slug);
+        using (var client = Public(source,slug,token))
+        using (var created = await client.PostAsJsonAsync("api/sessions",new { sessionId = "chat" }))
+            Assert.True(created.IsSuccessStatusCode,await created.Content.ReadAsStringAsync());
+        var edge = await cluster.StartAsync("edge");
+        var address = new Uri($"ws://127.0.0.1:{edge.FrontPort}/api/webui/stream");
+        using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(44));
+        async Task Subscribe(ClientWebSocket socket)
+        {
+            await socket.ConnectAsync(address,bound.Token);
+            Assert.Equal("connected",(await Frame(socket,bound.Token))["type"]!.ToString());
+            await socket.SendAsync(Encoding.UTF8.GetBytes("{\"type\":\"set-subscriptions\",\"revision\":1,\"sessionIds\":[\"chat\"],\"sessionListIds\":[],\"sessionListActive\":false}"),WebSocketMessageType.Text,true,bound.Token);
+            var baseline = false;
+            while (true)
+            {
+                var frame = await Frame(socket,bound.Token);
+                if (frame["type"]?.ToString() == "session-state" && frame["sessionId"]?.ToString() == "chat") baseline = true;
+                if (frame["type"]?.ToString() == "subscriptions-applied")
+                {
+                    Assert.Equal(1,frame["revision"]!.GetValue<int>());
+                    Assert.True(baseline,"subscription completed without the durable Session’s current state");
+                    break;
+                }
+            }
+        }
+        using var original = Socket(slug,token);
+        await Subscribe(original);
+        source.Terminate();
+        try
+        {
+            while ((await original.ReceiveAsync(new ArraySegment<byte>(new byte[8192]),bound.Token)).MessageType != WebSocketMessageType.Close) { }
+            await original.CloseOutputAsync(WebSocketCloseStatus.NormalClosure,"",bound.Token);
+        }
+        catch (WebSocketException) { /* An interrupted realtime transport reconnects as well. */ }
+        Assert.Equal(Foxwarm.Hosted.HostedExit.Stopped,await source.ExitAsync(TimeSpan.FromSeconds(12)));
+        using var successor = Socket(slug,token);
+        await Subscribe(successor);
+        Assert.Equal("edge",Foxwarm.Hosted.Lease.ReplicaRegistry.LogicalName((await cluster.OwnerAsync(slug))!));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

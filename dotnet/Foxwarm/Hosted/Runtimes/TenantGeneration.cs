@@ -53,6 +53,8 @@ internal interface IGenerationRuntime : IAsyncDisposable
     /// </summary>
     bool Idle { get; }
 
+    bool WorkInProgress => false;
+
     /// <summary>Acknowledge a reconciled wake-up only after successful publication.</summary>
     Task PublishedAsync(CancellationToken token) => Task.CompletedTask;
 
@@ -136,10 +138,19 @@ internal sealed class TenantGeneration
     internal WakeupDue? HandBack { get; private set; }
     internal bool ScheduleSettled { get; private set; }
 
-    internal Task<StopResult> RetireWithWakeupAsync(CancellationToken token) => RetireAsync(async () =>
+    internal Task<StopResult> RetireWithWakeupAsync(CancellationToken token, long? graceEnds = null, Task? marked = null) => RetireAsync(async () =>
     {
         using var steps = CancellationTokenSource.CreateLinkedTokenSource(token, Fence.Lost);
+        if (marked is not null)
+            try { await marked.WaitAsync(steps.Token).ConfigureAwait(false); }
+            catch (Exception) when (!steps.IsCancellationRequested) { /* Still settle locally if the database is unavailable. */ }
         var runtime = Runtime!;
+        while (graceEnds is long end && (Gate.InFlight > 0 || runtime.WorkInProgress))
+        {
+            var remaining = System.Diagnostics.Stopwatch.GetElapsedTime(System.Diagnostics.Stopwatch.GetTimestamp(), end);
+            if (remaining <= TimeSpan.Zero) break;
+            await Task.Delay(remaining < TimeSpan.FromMilliseconds(30) ? remaining : TimeSpan.FromMilliseconds(30), steps.Token).ConfigureAwait(false);
+        }
         await runtime.StopProducersAsync(steps.Token).ConfigureAwait(false);
         await runtime.SettleAsync(steps.Token).ConfigureAwait(false);
         HandBack = await runtime.NextDueAsync(steps.Token).ConfigureAwait(false);
