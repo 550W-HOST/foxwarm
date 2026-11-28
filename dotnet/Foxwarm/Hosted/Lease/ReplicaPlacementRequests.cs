@@ -33,8 +33,14 @@ internal sealed class ReplicaPlacementRequests(PgDatabase database, LeaseTimings
             floor = reader.GetInt32(2);
         }
         var value = action == PlacementAction.Move ? "move" : "release";
-        await using var lease = tx.Command("SELECT requested_action FROM tenant_leases WHERE tenant_id=$1 AND owner_replica=$2 AND epoch=$3 AND state='active' AND expires_at>clock_timestamp() FOR UPDATE", expectedTenantId, expectedBoot, expectedEpoch);
-        var pending = await lease.ExecuteScalarAsync(ct);
+        // An Installation-document writer holds KEY SHARE on this lease while raising
+        // the tenant's reader floor. NO KEY UPDATE serializes placement operations without
+        // blocking that writer after we've already locked the tenant.
+        await using var lease = tx.Command("SELECT 1 FROM tenant_leases WHERE tenant_id=$1 FOR NO KEY UPDATE", expectedTenantId);
+        if (await lease.ExecuteScalarAsync(ct) is null) return PlacementRequestResult.Stale;
+        // Evaluate expiry *after* the row lock was granted, including for an idempotent retry.
+        await using var current = tx.Command("SELECT requested_action FROM tenant_leases WHERE tenant_id=$1 AND owner_replica=$2 AND epoch=$3 AND state='active' AND expires_at>clock_timestamp()", expectedTenantId, expectedBoot, expectedEpoch);
+        var pending = await current.ExecuteScalarAsync(ct);
         if (pending is null) return PlacementRequestResult.Stale;
         if (pending is string existing) return existing == value ? PlacementRequestResult.AlreadyRequested : PlacementRequestResult.Conflict;
         if (action == PlacementAction.Move)
