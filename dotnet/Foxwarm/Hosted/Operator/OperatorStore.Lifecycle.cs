@@ -46,7 +46,7 @@ internal sealed partial class OperatorStore
                 if (tenant.State == "active")
                 {
                     await tx.ExecuteAsync(
-                        "UPDATE tenant_leases SET draining_since=coalesce(draining_since,clock_timestamp()) WHERE tenant_id=$1",
+                        "UPDATE tenant_leases SET requested_action=NULL,draining_since=coalesce(draining_since,clock_timestamp()) WHERE tenant_id=$1",
                         token,
                         tenant.Id
                     );
@@ -149,7 +149,7 @@ internal sealed partial class OperatorStore
                     await tx.ExecuteAsync(
                         """
                         UPDATE tenant_leases SET epoch=CASE WHEN state='active' THEN epoch+1 ELSE epoch END,
-                            state='released',expires_at=clock_timestamp(),draining_since=NULL WHERE tenant_id=$1
+                            state='released',expires_at=clock_timestamp(),draining_since=NULL,requested_action=NULL WHERE tenant_id=$1
                         """,
                         token,
                         tenant.Id

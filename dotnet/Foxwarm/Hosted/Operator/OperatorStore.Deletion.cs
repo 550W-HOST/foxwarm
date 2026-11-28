@@ -20,7 +20,7 @@ internal sealed partial class OperatorStore
                 {
                     await tx.ExecuteAsync(
                         """
-                        UPDATE tenant_leases SET deletion_epoch=epoch+1,epoch=epoch+1,state='released',owner_replica=NULL,
+                        UPDATE tenant_leases SET deletion_epoch=epoch+1,epoch=epoch+1,state='released',owner_replica=NULL,requested_action=NULL,
                             draining_since=coalesce(draining_since,clock_timestamp()),expires_at=clock_timestamp() WHERE tenant_id=$1
                         """,
                         token,

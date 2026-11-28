@@ -128,7 +128,7 @@ internal static class OperatorServer
         var segments = (remaining.Value ?? "").Trim('/').Split('/');
         var grantRoute = segments is ["tenants", _, "provider-grants"] && request.Method is "GET" or "PUT" or "DELETE";
         if (!grantRoute && (request.Method, segments) is not ("GET", ["placement"] or ["deletions"] or ["tenants"] or ["tenants", _] or ["profiles", _, "ceiling"])
-            and not ("POST", ["tenants"] or ["tenants", _, "rotate" or "suspend" or "resume"]) and not ("DELETE", ["tenants", _]) and not ("PATCH", ["tenants", _]) and not ("PUT", ["profiles", _, "ceiling"]))
+            and not ("POST", ["replicas", "drain"] or ["tenants"] or ["tenants", _, "rotate" or "suspend" or "resume" or "move" or "release"]) and not ("DELETE", ["tenants", _]) and not ("PATCH", ["tenants", _]) and not ("PUT", ["profiles", _, "ceiling"]))
         {
             response.StatusCode = 404;
             return;
@@ -154,6 +154,23 @@ internal static class OperatorServer
                     if (ids.Count != 1 || string.IsNullOrEmpty(ids[0])) throw new OperatorProblem(400, "Supply one Provider ID.");
                     result = await store.ChangeGrantAsync(slug, ids[0]!, request.Method == "PUT" ? await Body(request, ct) : null,
                         new Providers.ProviderGrants(listener.Deployment), ct);
+                    break;
+                case ("POST", ["replicas", "drain"]):
+                    var drain = await Body(request, ct);
+                    if (drain.Count != 1 || drain["boot"] is not JsonValue bootValue || !bootValue.TryGetValue<string>(out var boot) || string.IsNullOrWhiteSpace(boot))
+                        throw new OperatorProblem(400, "Supply the replica boot ID from placement.");
+                    result = await store.RequestReplicaDrainAsync(boot, ct);
+                    response.StatusCode = StatusCodes.Status202Accepted;
+                    break;
+                case ("POST", ["tenants", var slug, "move" or "release"]):
+                    var grant = await Body(request, ct);
+                    if (grant.Count != 3 || grant["tenantId"] is not JsonValue tenantId || !tenantId.TryGetValue<int>(out var id) || id < 1
+                        || grant["owner"] is not JsonValue ownerValue || !ownerValue.TryGetValue<string>(out var owner) || string.IsNullOrWhiteSpace(owner)
+                        || grant["epoch"] is not JsonValue epochValue || !epochValue.TryGetValue<long>(out var epoch) || epoch < 1)
+                        throw new OperatorProblem(400, "Supply the tenant ID, owner boot ID and epoch from placement.");
+                    result = await store.RequestTenantPlacementAsync(slug, id, owner, epoch,
+                        segments[2] == "move" ? PlacementAction.Move : PlacementAction.Release, ct);
+                    response.StatusCode = StatusCodes.Status202Accepted;
                     break;
                 case ("GET", ["placement"]): result = await store.PlacementAsync(ct); break;
                 case ("GET", ["tenants"]): result = await store.ReadAsync(null, ct); break;

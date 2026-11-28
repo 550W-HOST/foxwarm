@@ -75,6 +75,12 @@ Use `grants set SLUG PROVIDER QUOTAS-FILE` to give a tenant access to a configur
 
 Choose the Agent store at creation: hosted tenants use SQL Agent files, and the operator tenant uses Agent folders on the master host. `tenant set` refuses a profile edit that would switch stores.
 
+### Move, release or drain
+
+Finish upgrading all participating replicas to a multi-tenant build with placement actions before using these controls. Run `placement` to find a tenant’s `tenantId`, exact `owner` boot ID and `epoch`; pass those values to `tenant move SLUG TENANT-ID BOOT EPOCH` or `tenant release SLUG TENANT-ID BOOT EPOCH`. A move needs another eligible replica. Release leaves the tenant idle until demand starts it again. If placement changed, read it again before deciding whether to retry.
+
+`replica drain BOOT` stops new placements on that specific boot. A resident stays if there is no eligible destination. In the console, select a tenant to move or release its lease, or select **Drain replica** on the Replicas tab. Refresh to see the requested tenant action, whether its lease is draining, and how many unexpired leases the draining boot still holds. An accepted request is not a completed handoff.
+
 ### Suspend, resume and erase a tenant
 
 Use `tenant suspend SLUG` to stop serving a tenant, and `tenant resume SLUG` to bring it back. `tenant delete SLUG` requires a suspended tenant. It returns `deleting` as soon as the deletion is recorded. Check `tenant get SLUG`: the key and tombstone remain until the database can finalize the tenant and the object store has returned a settled empty listing. The tenant then returns 404 and its slug can be reused. Restarting the operator resumes outstanding deletions automatically. Finish an in-progress import first; an interrupted Agent-only import can also be abandoned with `foxwarm hosted agents import --tenant SLUG --abandon`.
