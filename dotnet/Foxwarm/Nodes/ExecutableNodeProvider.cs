@@ -28,6 +28,15 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
     private readonly object descriptionGate = new();
     private Task<JsonObject>? description;
     internal string Id => id;
+    internal string? Tenant { get; init; }
+    internal ProviderQuotas? Quotas { get; init; }
+    internal Action<string>? Stderr { get; init; }
+    internal Func<CancellationToken, Task>? ChargeLifecycle { get; init; }
+
+    internal void Identify(JsonObject envelope)
+    {
+        if (Tenant is not null) envelope["tenant"] = Tenant;
+    }
     internal int TimeoutSeconds => timeoutSeconds;
     internal string? ParentNode => SessionWait.Text(config["parentNode"]);
     private static readonly string[] EnvironmentKeys =
@@ -81,8 +90,11 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                 "ensureParameters",
                 "lifecycleDescription",
                 "dataRetention",
+                "tenancy",
             ]
         );
+        if (value.ContainsKey("tenancy") && SessionWait.Text(value["tenancy"]) != "per-tenant")
+            throw new NodeProviderException("NODE_PROVIDER_TENANCY_MISMATCH", $"Provider '{id}' reported tenancy '{value["tenancy"]}'; only per-tenant is supported.");
         Bounded(value["label"], 256);
         Bounded(value["description"], 4096);
         if (
@@ -334,6 +346,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                 ["requestId"] = requestId,
                 ["operation"] = operation,
             };
+            Identify(envelope);
             if (request is not null)
                 envelope["request"] = request.DeepClone();
             ValidateJson(envelope, 32, 100_000);
@@ -381,10 +394,10 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         JsonObject response
     )
     {
-        Keys(
-            response,
-            ["protocol", "providerId", "requestId", "operation", "ok", "result", "error"]
-        );
+        if (envelope.ContainsKey("tenant") != response.ContainsKey("tenant")
+            || envelope.ContainsKey("tenant") && SessionWait.Text(response["tenant"]) != SessionWait.Text(envelope["tenant"]))
+            throw new NodeProviderException("NODE_PROVIDER_TENANT_MISMATCH", "Provider response identity does not match the request.");
+        Keys(response, ["protocol", "providerId", "requestId", "operation", "ok", "result", "error", "tenant"]);
         foreach (var key in new[] { "protocol", "providerId", "requestId", "operation" })
             if (SessionWait.Text(response[key]) != SessionWait.Text(envelope[key]))
                 throw new NodeProviderException(

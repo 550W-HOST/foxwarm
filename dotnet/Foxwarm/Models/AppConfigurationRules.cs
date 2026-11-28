@@ -192,6 +192,7 @@ internal static class AppConfigurationRules
                 "args",
                 "timeoutSeconds",
                 "parentNode",
+                "tenancy",
             ]);
             var unknown = provider
                 .Select(pair => pair.Key)
@@ -200,6 +201,8 @@ internal static class AppConfigurationRules
                 throw new InvalidDataException(
                     $"app config `nodeProviders.{id}` has unsupported field `{unknown}`."
                 );
+            if (provider.ContainsKey("tenancy") && Text(provider["tenancy"]) != "per-tenant")
+                throw new InvalidDataException($"app config `nodeProviders.{id}.tenancy` must be `per-tenant`.");
             if (provider.ContainsKey("parentNode"))
             {
                 var parent = Text(provider["parentNode"]);
