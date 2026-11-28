@@ -246,3 +246,19 @@ summary {
 #replicaRows td:first-child {
   white-space: nowrap;
 }
+
+#placementActions {
+  border: 0;
+  border-top: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
+  border-radius: 0;
+  padding: 1rem 0;
+}
+#leaseStatus {
+  overflow-wrap: anywhere;
+}
+.placement-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

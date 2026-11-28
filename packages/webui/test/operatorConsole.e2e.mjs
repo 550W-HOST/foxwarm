@@ -9,6 +9,10 @@ import puppeteer from 'puppeteer-core'
 test('operator console signs in, edits limits and journal, follows placement and suspends and resumes', async () => {
   const requests = [],
     bearer = 'operator-browser-test'
+  let requestAction = null,
+    draining = false,
+    acceptMove = false
+  const boot = 'general-replica-2/boot'
   let state = 'active',
     recording = false,
     retention = null
@@ -58,7 +62,11 @@ test('operator console signs in, edits limits and journal, follows placement and
           tenants: [
             {
               slug: 'alpha',
-              owner: 'general-replica-2',
+              tenantId: 42,
+              epoch: 9,
+              owner: boot,
+              requestedAction: requestAction,
+              drainingSince: null,
               hot: 2,
               busy: 1,
               providerProblems: {
@@ -70,15 +78,34 @@ test('operator console signs in, edits limits and journal, follows placement and
           ],
           replicas: [
             {
+              id: boot,
               name: 'general-replica-2',
+              heldGrants: 1,
               role: 'general',
               version: 'test',
-              draining: false,
+              draining,
               heartbeatAt: '2025-01-01T01:00Z',
             },
           ],
         }),
       )
+      return
+    }
+    if (req.method === 'POST' && (path === 'tenants/alpha/move' || path === 'tenants/alpha/release')) {
+      if (path.endsWith('move') && !acceptMove) {
+        res.writeHead(409)
+        res.end('{"error":"No other eligible replica can take this tenant."}')
+        return
+      }
+      requestAction = path.endsWith('move') ? 'move' : 'release'
+      res.writeHead(202)
+      res.end('{}')
+      return
+    }
+    if (req.method === 'POST' && path === 'replicas/drain') {
+      draining = true
+      res.writeHead(202)
+      res.end('{}')
       return
     }
     if (path === 'tenants/alpha' && req.method === 'PATCH') {
@@ -151,9 +178,31 @@ test('operator console signs in, edits limits and journal, follows placement and
     await page.waitForFunction(() => document.querySelector('#stateAction').textContent === 'Resume tenant')
     await page.click('#stateAction')
     await page.waitForFunction(() => document.querySelector('#stateAction').textContent === 'Suspend tenant')
+    await page.click('#moveTenant')
+    await page.waitForFunction(() => document.querySelector('#notice').textContent.includes('No other eligible'))
+    assert.equal(requestAction, null)
+    acceptMove = true
+    await page.click('#moveTenant')
+    await page.waitForFunction(() => document.querySelector('#leaseStatus').textContent.includes('Move requested'))
+    assert.equal(await page.$eval('#releaseTenant', (e) => e.disabled), true)
+    assert.deepEqual(JSON.parse(requests.findLast((r) => r.url.endsWith('/move')).body), {
+      tenantId: 42,
+      owner: boot,
+      epoch: 9,
+    })
+    requestAction = null
+    await page.click('#refresh')
+    await page.waitForFunction(() => !document.querySelector('#releaseTenant').disabled)
+    await page.click('#releaseTenant')
+    await page.waitForFunction(() =>
+      document.querySelector('#leaseStatus').textContent.includes('Release requested'),
+    )
     await page.click('#showReplicas')
-    assert.equal(await page.$eval('#replicaRows tr td', (e) => e.textContent), 'general-replica-2')
+    assert.equal(await page.$eval('#replicaRows tr td', (e) => e.textContent), boot)
     assert.equal(await page.$eval('#replicaRows tr td', lineCount), 1)
+    await page.click('#replicaRows button')
+    await page.waitForFunction(() => document.querySelector('#replicaRows button').disabled)
+    assert.deepEqual(JSON.parse(requests.find((r) => r.url.endsWith('/replicas/drain')).body), { boot })
     assert.equal(await page.$eval('#detail', (e) => e.hidden), true)
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
     assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0)

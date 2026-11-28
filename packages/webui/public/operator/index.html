@@ -64,6 +64,8 @@
                   <th>Version</th>
                   <th>Draining</th>
                   <th>Last heartbeat</th>
+                  <th>Held leases</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody id="replicaRows"></tbody>
@@ -80,6 +82,13 @@
             <button id="stateAction"></button>
           </div>
           <div id="providerStatus" class="muted"></div>
+          <section id="placementActions" aria-labelledby="placementHeading">
+            <h3 id="placementHeading">Placement</h3>
+            <p id="leaseStatus"></p>
+            <div class="placement-buttons">
+              <button id="moveTenant">Move tenant</button><button id="releaseTenant">Release lease</button>
+            </div>
+          </section>
           <form id="settings">
             <fieldset id="fields">
               <legend>Limits</legend>
