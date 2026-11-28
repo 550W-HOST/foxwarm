@@ -200,16 +200,18 @@ public sealed class PostgresAgentFilesEdgeTests
     {
         internal long RangeBytes;
         internal int WholeReads;
+        internal Func<Task>? BeforeRead;
 
         public bool Exists(string key) => inner.Exists(key);
 
         public Task<bool> CreateAsync(string key, ReadOnlyMemory<byte> content, bool keepExisting, CancellationToken token) =>
             inner.CreateAsync(key, content, keepExisting, token);
 
-        public Task<byte[]> ReadAllAsync(string key, CancellationToken token)
+        public async Task<byte[]> ReadAllAsync(string key, CancellationToken token)
         {
             Interlocked.Increment(ref WholeReads);
-            return inner.ReadAllAsync(key, token);
+            if (BeforeRead is { } before) await before();
+            return await inner.ReadAllAsync(key, token);
         }
 
         public Stream OpenRead(string key)
@@ -220,6 +222,7 @@ public sealed class PostgresAgentFilesEdgeTests
 
         public async Task<byte[]> ReadRangeAsync(string key, long offset, int count, CancellationToken token)
         {
+            if (BeforeRead is { } before) await before();
             var bytes = await inner.ReadRangeAsync(key, offset, count, token);
             Interlocked.Add(ref RangeBytes, bytes.Length);
             return bytes;
@@ -228,6 +231,29 @@ public sealed class PostgresAgentFilesEdgeTests
         public IReadOnlyList<string> List(string prefix) => inner.List(prefix);
 
         public string? LocalPath(string key) => inner.LocalPath(key);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_read_whose_observed_blob_was_collected_returns_the_replacement(bool range)
+    {
+        var (database, tenant) = await PostgresAgentFilesTests.OpenAsync();
+        await using var _ = database;
+        var bytes = new byte[PgAgentFileStore.InlineBytes + 1];
+        var blobs = new CountingBlobs(new PgBlobStore(tenant, PgAgentFileStore.BlobStoreName));
+        var store = new PgAgentFileStore(tenant, blobs, () => new(bytes.Length, 10, bytes.Length));
+        await store.WriteAsync(null, "file", bytes, null, default);
+        blobs.BeforeRead = async () =>
+        {
+            blobs.BeforeRead = null;
+            bytes[0] = 1;
+            await store.WriteAsync(null, "file", bytes, null, default);
+            bytes[0] = 2;
+            await store.WriteAsync(null, "file", bytes, null, default);
+        };
+        var result = range ? await store.ReadRangeAsync(null, "file", 0, 1, default) : (await store.ReadAsync(null, "file", default)).Bytes;
+        Assert.Equal(2, result[0]);
     }
 
     [Fact]

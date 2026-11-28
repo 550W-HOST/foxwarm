@@ -119,7 +119,7 @@ internal sealed class AgentFilePathTooLongException(string message) : ArgumentEx
 /// <summary>A write refused at admission because it would exceed one of the <see cref="AgentStoreLimits"/>.</summary>
 internal sealed class AgentStoreQuotaException(string limit, string message) : IOException(message)
 {
-    /// <summary><c>fileBytes</c>, <c>totalBytes</c> or <c>files</c>.</summary>
+    /// <summary><c>fileBytes</c>, <c>totalBytes</c>, <c>files</c> or <c>retainedBytes</c>.</summary>
     internal string Limit { get; } = limit;
 }
 

@@ -138,52 +138,58 @@ internal sealed partial class PgAgentFileStore : IAgentStore
     {
         AgentFilePaths.Require(path);
         var key = Key(agent);
-        var row = await database
-            .ReadAsync(
-                async (tx, cancel) =>
-                {
-                    await using var command = tx.Command(
-                        "SELECT kind, size, blob_key, sha256, CASE WHEN inline IS NULL THEN NULL"
-                            + " ELSE substring(inline FROM $3 FOR $4) END FROM agent_files"
-                            + " WHERE agent = $1 AND path = $2",
-                        key,
-                        path,
-                        offset >= int.MaxValue ? int.MaxValue : (int)offset + 1,
-                        Math.Max(count, 0)
-                    );
-                    await using var reader = await command.ExecuteReaderAsync(cancel).ConfigureAwait(false);
-                    if (!await reader.ReadAsync(cancel).ConfigureAwait(false))
+        while (true)
+        {
+            var row = await database
+                .ReadAsync(
+                    async (tx, cancel) =>
                     {
-                        await reader.CloseAsync().ConfigureAwait(false);
-                        return await HasChildrenAsync(tx, key, path, cancel).ConfigureAwait(false)
-                            ? ("dir", 0L, (string?)null, (byte[]?)null, (byte[]?)null)
-                            : default;
-                    }
-                    return (
-                        reader.GetString(0),
-                        reader.GetInt64(1),
-                        reader.IsDBNull(2) ? null : reader.GetString(2),
-                        reader.IsDBNull(3) ? null : reader.GetFieldValue<byte[]>(3),
-                        reader.IsDBNull(4) ? null : reader.GetFieldValue<byte[]>(4)
-                    );
-                },
-                snapshot: true,
-                token: token
+                        await using var command = tx.Command(
+                            "SELECT kind, size, blob_key, sha256, CASE WHEN inline IS NULL THEN NULL"
+                                + " ELSE substring(inline FROM $3 FOR $4) END, generation FROM agent_files"
+                                + " WHERE agent = $1 AND path = $2",
+                            key,
+                            path,
+                            offset >= int.MaxValue ? int.MaxValue : (int)offset + 1,
+                            Math.Max(count, 0)
+                        );
+                        await using var reader = await command.ExecuteReaderAsync(cancel).ConfigureAwait(false);
+                        if (!await reader.ReadAsync(cancel).ConfigureAwait(false))
+                        {
+                            await reader.CloseAsync().ConfigureAwait(false);
+                            return await HasChildrenAsync(tx, key, path, cancel).ConfigureAwait(false)
+                                ? ("dir", 0L, (string?)null, (byte[]?)null, (byte[]?)null, 0L)
+                                : default;
+                        }
+                        return (
+                            reader.GetString(0),
+                            reader.GetInt64(1),
+                            reader.IsDBNull(2) ? null : reader.GetString(2),
+                            reader.IsDBNull(3) ? null : reader.GetFieldValue<byte[]>(3),
+                            reader.IsDBNull(4) ? null : reader.GetFieldValue<byte[]>(4),
+                            reader.GetInt64(5)
+                        );
+                    },
+                    snapshot: true,
+                    token: token
+                )
+                .ConfigureAwait(false);
+            if (row.Item1 is null)
+                throw AgentFileErrors.NotFound(path);
+            if (row.Item1 == "dir")
+                throw AgentFileErrors.IsDirectory(path);
+            var (_, size, blobKey, sha256, slice, generation) = row;
+            var bytes = slice ?? (blobKey is null ? [] : await ReadBlobVersionAsync(key, path, generation,
+                () => blobs.ReadRangeAsync(blobKey, offset, count, token), token));
+            if (bytes is null) continue;
+            var expected = offset >= size ? 0 : Math.Min(count, size - offset);
+            if (
+                bytes.Length != expected
+                || offset == 0 && expected == size && !SHA256.HashData(bytes).AsSpan().SequenceEqual(sha256)
             )
-            .ConfigureAwait(false);
-        if (row.Item1 is null)
-            throw AgentFileErrors.NotFound(path);
-        if (row.Item1 == "dir")
-            throw AgentFileErrors.IsDirectory(path);
-        var (_, size, blobKey, sha256, slice) = row;
-        var bytes = slice ?? (blobKey is null ? [] : await blobs.ReadRangeAsync(blobKey, offset, count, token).ConfigureAwait(false));
-        var expected = offset >= size ? 0 : Math.Min(count, size - offset);
-        if (
-            bytes.Length != expected
-            || offset == 0 && expected == size && !SHA256.HashData(bytes).AsSpan().SequenceEqual(sha256)
-        )
-            throw new IOException("Stored content of " + path + " doesn't match its digest.");
-        return bytes;
+                throw new IOException("Stored content of " + path + " doesn't match its digest.");
+            return bytes;
+        }
     }
 
     public async Task<AgentFileContent> ReadAsync(string? agent, string path, CancellationToken token) =>
@@ -192,13 +198,32 @@ internal sealed partial class PgAgentFileStore : IAgentStore
     // One row: its content is fetched only when its size is within the bound.
     public async Task<AgentFileContent?> ReadBoundedAsync(string? agent, string path, long maxBytes, CancellationToken token)
     {
-        var row = await LookupAsync(agent, path, token, maxBytes).ConfigureAwait(false);
-        if (row.Size > maxBytes)
-            return null;
-        var bytes = row.Inline ?? await blobs.ReadAllAsync(row.BlobKey!, token).ConfigureAwait(false);
-        if (bytes.Length != row.Size || !SHA256.HashData(bytes).AsSpan().SequenceEqual(row.Sha256))
-            throw new IOException("Stored content of " + path + " doesn't match its digest.");
-        return new(bytes, row.Generation);
+        while (true)
+        {
+            var row = await LookupAsync(agent, path, token, maxBytes).ConfigureAwait(false);
+            if (row.Size > maxBytes)
+                return null;
+            var bytes = row.Inline ?? await ReadBlobVersionAsync(Key(agent), path, row.Generation,
+                () => blobs.ReadAllAsync(row.BlobKey!, token), token);
+            if (bytes is null) continue;
+            if (bytes.Length != row.Size || !SHA256.HashData(bytes).AsSpan().SequenceEqual(row.Sha256))
+                throw new IOException("Stored content of " + path + " doesn't match its digest.");
+            return new(bytes, row.Generation);
+        }
+    }
+
+    // A concurrent replacement can retire and collect the object between metadata lookup
+    // and GET. Re-read the path only if it changed; a missing live object remains an error.
+    private async Task<byte[]?> ReadBlobVersionAsync(string agent, string path, long generation, Func<Task<byte[]>> read, CancellationToken token)
+    {
+        try { return await read(); }
+        catch (FileNotFoundException)
+        {
+            if (await database.ReadAsync((tx, ct) => ScalarAsync(tx,
+                "SELECT 1 FROM agent_files WHERE agent=$1 AND path=$2 AND generation=$3", ct, agent, path, generation), token: token) is null)
+                return null;
+            throw;
+        }
     }
 
     // The file row at a path; a directory or a missing path fails as a file read does.
@@ -261,13 +286,13 @@ internal sealed partial class PgAgentFileStore : IAgentStore
             throw AgentFileErrors.FileTooLarge(path, limits());
         return lanes.RunAsync(
             key,
-            async () =>
+            () => WithClaimAsync(async claim =>
             {
                 var sha256 = SHA256.HashData(content.Span);
                 BlobReservation? reservation = null;
                 if (content.Length > InlineBytes)
                 {
-                    var reservations = await ReserveAsync(key, [(sha256, content)], async (tx, usage, limit, cancel) =>
+                    var reservations = await ReserveAsync(claim, key, [(sha256, content)], async (tx, usage, limit, cancel) =>
                     {
                         if (content.Length > limit.FileBytes) throw AgentFileErrors.FileTooLarge(path, limit);
                         var (bytes, entries) = await WriteAdmissionAsync(tx, key, agent, path, content.Length, expectedGeneration, cancel);
@@ -297,7 +322,7 @@ internal sealed partial class PgAgentFileStore : IAgentStore
                                 - await PrepareParentsAsync(tx, key, path, cancel).ConfigureAwait(false);
                             var bytes = content.Length - (current?.Size ?? 0);
                             usage.Admit(limit, bytes, entries);
-                            var blobKey = reservation is null ? null : await PublishBlobAsync(tx, reservation, content, sha256, cancel);
+                            var blobKey = reservation is null ? null : await PublishBlobAsync(tx, claim, reservation, content, sha256, cancel);
                             generation = await AllocateGenerationAsync(tx, cancel).ConfigureAwait(false);
                             await tx.ExecuteAsync(
                                     "INSERT INTO agent_files (agent, path, kind, size, sha256, generation, inline, blob_key)"
@@ -336,7 +361,7 @@ internal sealed partial class PgAgentFileStore : IAgentStore
                         token
                     )
                     .ConfigureAwait(false);
-            },
+            }),
             token
         );
     }
@@ -575,7 +600,7 @@ internal sealed partial class PgAgentFileStore : IAgentStore
         AdmitCreation(agent, directories, files);
         return lanes.RunAsync(
             agent,
-            async () =>
+            () => WithClaimAsync(async claim =>
             {
                 // Only directories no file lies below need a row of their own.
                 var empty = directories
@@ -584,7 +609,7 @@ internal sealed partial class PgAgentFileStore : IAgentStore
                 var stored = files.Select(file => (Path: file.Key, Content: file.Value, Sha256: SHA256.HashData(file.Value))).ToArray();
                 var largeFiles = stored.Where(file => file.Content.Length > InlineBytes)
                     .Select(file => (file.Sha256, (ReadOnlyMemory<byte>)file.Content)).ToArray();
-                var reservations = await ReserveAsync(agent, largeFiles, async (tx, usage, limit, cancel) =>
+                var reservations = await ReserveAsync(claim, agent, largeFiles, async (tx, usage, limit, cancel) =>
                 {
                     if (await RowAtAsync(tx, agent, "", cancel) is not null)
                         throw new AgentFileConflictException($"Agent '{agent}' already exists.");
@@ -610,7 +635,7 @@ internal sealed partial class PgAgentFileStore : IAgentStore
                                 await InsertDirectoryAsync(tx, agent, directory, cancel).ConfigureAwait(false);
                             foreach (var file in stored)
                             {
-                                var blobKey = file.Content.Length <= InlineBytes ? null : await PublishBlobAsync(tx,
+                                var blobKey = file.Content.Length <= InlineBytes ? null : await PublishBlobAsync(tx, claim,
                                     reservations[BlobKey(agent, file.Sha256)], file.Content, file.Sha256, cancel);
                                 await tx.ExecuteAsync(
                                         "INSERT INTO agent_files (agent, path, kind, size, sha256, generation, inline, blob_key)"
@@ -639,7 +664,7 @@ internal sealed partial class PgAgentFileStore : IAgentStore
                         token
                     )
                     .ConfigureAwait(false);
-            },
+            }),
             token
         );
     }

@@ -55,7 +55,12 @@ internal sealed class S3BlobStore : IBlobStore
     internal async Task PutAgentFileOnceAsync(string key, ReadOnlyMemory<byte> bytes, CancellationToken ct)
     {
         if (client.Config.MaxErrorRetry != 0) throw new InvalidOperationException("Agent file PUTs require a single-attempt client.");
-        var result = await PutAsync(root + key, bytes, ConditionalWrites, ct);
+        PutOutcome result;
+        try { result = await PutAsync(root + key, bytes, ConditionalWrites, ct); }
+        catch (Exception error) when (S3Blobs.Failure(error, key) is { } failure)
+        {
+            throw failure;
+        }
         if (result is not (PutOutcome.Created or PutOutcome.Exists))
             throw new IOException("The Agent file upload did not complete. Retry the write.");
     }

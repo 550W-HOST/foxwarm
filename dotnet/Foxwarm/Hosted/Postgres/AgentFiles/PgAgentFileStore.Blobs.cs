@@ -7,13 +7,45 @@ internal sealed partial class PgAgentFileStore
 {
     private sealed record BlobReservation(string ContentKey, string ObjectKey, string State, bool Fresh);
 
+    private sealed class Claim
+    {
+        internal Guid Id;
+        internal bool Held;
+    }
+
+    private async Task<T> WithClaimAsync<T>(Func<Claim, Task<T>> operation)
+    {
+        var claim = new Claim();
+        try
+        {
+            return await operation(claim);
+        }
+        catch when (claim.Held)
+        {
+            try
+            {
+                await database.WriteAsync(async (tx, ct) =>
+                {
+                    await LockUsageAsync(tx, ct);
+                    return await tx.ExecuteAsync("UPDATE agent_blob_reservations SET claim=NULL,claim_epoch=NULL WHERE claim=$1", ct, claim.Id);
+                });
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine($"[hosted] Could not release an Agent blob admission; the next epoch ignores its claim: {error.Message}");
+            }
+            throw;
+        }
+    }
+
     // Commit the charge before any network PUT. A missing acknowledgement from this SQL
     // transaction authorizes no network write; a subsequent admission finds the same charge.
     private async Task<Dictionary<string, BlobReservation>> ReserveAsync(
-        string agent, (byte[] Hash, ReadOnlyMemory<byte> Bytes)[] files,
+        Claim claim, string agent, (byte[] Hash, ReadOnlyMemory<byte> Bytes)[] files,
         Func<PgTx, UsageRow, AgentStoreLimits, CancellationToken, Task> admit, CancellationToken token)
     {
         if (files.Length == 0) return [];
+        claim.Id = Guid.NewGuid();
         var contents = files.DistinctBy(file => BlobKey(agent, file.Hash))
             .ToDictionary(file => BlobKey(agent, file.Hash), file => file.Bytes, StringComparer.Ordinal);
         var s3 = blobs as S3BlobStore;
@@ -41,20 +73,33 @@ internal sealed partial class PgAgentFileStore
                     }
                 }
                 objectKey = s3 is null ? key : key + "." + Guid.NewGuid().ToString("N");
-                await tx.ExecuteAsync("INSERT INTO agent_blob_reservations(content_key,object_key,byte_length,state) VALUES ($1,$2,$3,'pending')", ct, key, objectKey, (long)bytes.Length);
-                result.Add(key, new(key, objectKey, "pending", true));
+                await tx.ExecuteAsync("INSERT INTO agent_blob_reservations(content_key,object_key,byte_length,state) VALUES ($1,$2,$3,'reserved')", ct, key, objectKey, (long)bytes.Length);
+                result.Add(key, new(key, objectKey, "reserved", true));
             }
+            await tx.ExecuteAsync("UPDATE agent_blob_reservations SET claim=$1, claim_epoch=$2 WHERE content_key=ANY($3)", ct,
+                claim.Id, database.Epoch, contents.Keys.ToArray());
             if (result.Values.Any(r => r.Fresh))
             {
+                if (s3 is null)
+                    await tx.ExecuteAsync("""
+                        SELECT foxwarm_collect_agent_pg(overage) FROM
+                            (SELECT sum(byte_length)-2*$1::numeric AS overage FROM agent_blob_reservations) usage
+                        WHERE overage>0
+                        """, ct, limit.TotalBytes);
                 var bound = 2m * limit.TotalBytes;
                 if (await ScalarAsync(tx, "SELECT sum(byte_length)>2*$1::numeric FROM agent_blob_reservations", ct, limit.TotalBytes) is true)
+                {
+                    if (s3 is not null)
+                        Console.Error.WriteLine("[hosted] Agent blob reservations are full. Check that the operator is running and can collect unreferenced object versions.");
                     throw AgentFileErrors.RetainedTooLarge(bound);
+                }
             }
+            claim.Held = true;
             return result;
         }, new PgWriteOptions(Retryable: true), token);
         if (s3 is not null)
             foreach (var r in reservations.Values)
-                await EnsureRemoteAsync(s3, r, contents[r.ContentKey], token);
+                await EnsureRemoteAsync(s3, claim, r, contents[r.ContentKey], token);
         return reservations;
     }
 
@@ -73,10 +118,24 @@ internal sealed partial class PgAgentFileStore
         await tx.ExecuteAsync("UPDATE agent_file_usage SET blob_inventory='postgres'", ct);
     }
 
-    private async Task EnsureRemoteAsync(S3BlobStore s3, BlobReservation reservation, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    private async Task EnsureRemoteAsync(S3BlobStore s3, Claim claim, BlobReservation reservation, ReadOnlyMemory<byte> bytes, CancellationToken ct)
     {
         if (reservation.State == "stored") return;
-        if (!reservation.Fresh)
+        if (reservation.State == "reserved")
+        {
+            await database.WriteAsync(async (tx, cancel) =>
+            {
+                await LockUsageAsync(tx, cancel);
+                var dispatched = await tx.ExecuteAsync("""
+                    UPDATE agent_blob_reservations SET state='pending',conditional_put=$3
+                    WHERE object_key=$1 AND state='reserved' AND claim=$2
+                    """, cancel, reservation.ObjectKey, claim.Id, s3.ConditionalWrites);
+                if (dispatched == 0)
+                    throw new IOException("Agent file storage changed during admission. Retry the write.");
+                return true;
+            }, token: ct);
+        }
+        else
         {
             if (await s3.ExistsAsync(reservation.ObjectKey, ct)) return;
             // With an unknown previous dispatch, conditional writes can still produce at most
@@ -86,7 +145,11 @@ internal sealed partial class PgAgentFileStore
             await database.WriteAsync(async (tx, cancel) =>
             {
                 await LockUsageAsync(tx, cancel);
-                if (await tx.ExecuteAsync("UPDATE agent_blob_reservations SET state='pinned' WHERE object_key=$1 AND state IN ('pending','pinned')", cancel, reservation.ObjectKey) == 0)
+                var pinned = await tx.ExecuteAsync("""
+                    UPDATE agent_blob_reservations SET state='pinned'
+                    WHERE object_key=$1 AND state IN ('pending','pinned') AND conditional_put AND claim=$2
+                    """, cancel, reservation.ObjectKey, claim.Id);
+                if (pinned == 0)
                     throw new IOException("Agent file storage changed during admission. Retry the write.");
                 return true;
             }, token: ct);
@@ -94,15 +157,19 @@ internal sealed partial class PgAgentFileStore
         await s3.PutAgentFileOnceAsync(reservation.ObjectKey, bytes, ct);
     }
 
-    private async Task<string> PublishBlobAsync(PgTx tx, BlobReservation reservation, ReadOnlyMemory<byte> content, byte[] hash, CancellationToken ct)
+    private async Task<string> PublishBlobAsync(PgTx tx, Claim claim, BlobReservation reservation, ReadOnlyMemory<byte> content, byte[] hash, CancellationToken ct)
     {
         // LockUsageAsync already serialized this publication against collection. A collector
         // that won the race retired this admission; it cannot delete a subsequent incarnation.
-        if (await tx.ExecuteAsync("UPDATE agent_blob_reservations SET state=CASE WHEN state='pinned' THEN state ELSE 'stored' END WHERE object_key=$1 AND state<>'deleting'", ct, reservation.ObjectKey) == 0)
+        var published = await tx.ExecuteAsync("""
+            UPDATE agent_blob_reservations SET state=CASE WHEN state='pinned' THEN state ELSE 'stored' END,
+                claim=NULL,claim_epoch=NULL
+            WHERE object_key=$1 AND state<>'deleting' AND (claim=$2 OR claim IS NULL)
+            """, ct, reservation.ObjectKey, claim.Id);
+        if (published == 0)
             throw new IOException("Agent file storage changed during admission. Retry the write.");
         if (blobs is not S3BlobStore)
             await PgBlobStore.CreateInAsync(tx, BlobStoreName, reservation.ObjectKey, content, hash, true, ct);
         return reservation.ObjectKey;
     }
-
 }

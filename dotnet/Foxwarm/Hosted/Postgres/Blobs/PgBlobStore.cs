@@ -174,6 +174,7 @@ internal sealed class PgBlobStore(TenantDb database, string store) : IBlobStore
                 }
                 return position == bytes.Length ? bytes : throw Corrupt(key);
             },
+            snapshot: store == PgAgentFileStore.BlobStoreName,
             token: token
         );
 
@@ -209,6 +210,7 @@ internal sealed class PgBlobStore(TenantDb database, string store) : IBlobStore
                 }
                 return result;
             },
+            snapshot: store == PgAgentFileStore.BlobStoreName,
             token: token
         );
 

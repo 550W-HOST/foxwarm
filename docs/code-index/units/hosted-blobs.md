@@ -14,7 +14,7 @@ A hosted tenant's image originals and artifact revisions and resources are [`IBl
 - **Selection.** The deployment configuration's `blobs` block ([hosted configuration](./hosted-config.md#d-hosted-config-split)). `blobs.backend` is `s3` or `postgres`, required, with no default. `blobs.s3` exists exactly with `s3` and requires `endpoint` (an http or https URL without a path), `region`, `bucket` (S3 bucket naming rules), `pathStyle` (boolean), and `accessKeyIdFile` and `secretAccessKeyFile` (absolute paths of mounted files; surrounding whitespace isn't part of a value). Any other key, a missing key or an invalid value refuses startup with exit 78, naming the key. The credentials never appear in the YAML. The entry reads the credential files before standing by, so a missing file fails at once, and again when it builds the runtime.
 - **Wiring.** `PostgresStorageContext` builds the PostgreSQL stores (`images`, `artifacts`) in its `CreateImageBlobs`/`CreateArtifactBlobs` slots. `HostedEntry.CreateRuntimeAsync`, after the missing-stores refusal, calls `OpenBlobsAsync` with the deployment's settings; for S3 it reads the credentials, probes the endpoint once and replaces both stores, then rebuilds the authority, which holds the image store. An S3 request refused with a 4xx (wrong bucket, credentials) is `HostedStartupException` (exit 78); an unreachable endpoint fails as it is (exit 1), so the orchestrator retries.
 - **Key layout on S3:** `t/<tenant>/<store>/<key>` in the deployment bucket, `<tenant>` being the [operator-provisioned object identity](./hosted-operator.md#tenant-lifecycle-and-login) when present, otherwise the tenant name. The bucket is the operator's; Foxwarm never creates or deletes buckets.
-- **Retention** is file mode's: nothing deletes blobs in P1, and the runtime role has no `DELETE` on the blob tables. Collection of unreferenced blobs that respects the backup window is P3.
+- **Retention** is file mode's: nothing deletes blobs in P1, and the runtime role has no `DELETE` on the blob tables. Collection of unreferenced images and artifacts that respects the backup window is P3. The [Agent store](./hosted-agent-store.md#d-agent-store-limits) owns a separate quota and collection policy for Agent content.
 
 ## S3 backend
 
@@ -29,7 +29,7 @@ A hosted tenant's image originals and artifact revisions and resources are [`IBl
 
 ### D-hosted-blob-unfenced-writes
 
-S3 writes aren't covered by the database fence. A write from an owner that has lost its lease is harmless:
+S3 writes aren't covered by the database fence. Images and artifacts use the following ownership rules; [Agent files](./hosted-agent-store.md#d-agent-store-limits) use durable reservations and incarnation-specific names.
 
 - Keys are immutable and created once. A late create either finds its key existing and changes nothing, or lands on a key no committed state refers to: the fenced owner's database commit that would reference it fails. The new owner's create of that key fails like an existing file or, for an image, finds the same bytes (image keys are content digests, and reads verify them).
 - At worst the late object is an orphan, which P3's collection removes. File mode leaves the same orphan when it crashes between the blob write and the commit. An orphan artifact revision is visible to `LatestRevisionAsync` exactly as after such a crash.
