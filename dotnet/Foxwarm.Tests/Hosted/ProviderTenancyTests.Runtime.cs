@@ -91,7 +91,7 @@ public sealed partial class ProviderTenancyTests
             Assert.False(registry.HasProvider("broken"));
             var calls = Calls(temp.Path);
             Assert.Equal(master,calls.Any(c=>c["providerId"]?.ToString()=="legacy"));
-            Assert.All(calls.Where(c=>c["providerId"]?.ToString()=="legacy"),c=>Assert.False(c.ContainsKey("tenant")));
+            Assert.All(calls.Where(c=>c["providerId"]?.ToString()=="legacy"),c=>Assert.False(c.ContainsKey("tenantId")));
             using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(6));
             string? raw;
             while ((raw=await db.ScalarAsync("SELECT (capacity->'tenants'->$1->'providerProblems')::text FROM replicas WHERE name='provider-host'",slug) as string) is null)

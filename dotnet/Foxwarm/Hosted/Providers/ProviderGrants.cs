@@ -82,7 +82,7 @@ internal sealed class ProviderGrants(DeploymentConfiguration deployment, Action<
             var extended = SessionWait.Text(definition["tenancy"]) == "per-tenant";
             var driver = new ExecutableNodeProvider(id, definition)
             {
-                Tenant = extended ? slug : null,
+                TenantId = extended ? database.TenantId : null,
                 Quotas = limits,
                 Stderr = line => (diagnostic ?? Console.Error.WriteLine)($"[provider:{id}] [tenant:{slug}] {line}"),
                 ChargeLifecycle = limits is null ? null

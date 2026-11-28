@@ -28,14 +28,14 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
     private readonly object descriptionGate = new();
     private Task<JsonObject>? description;
     internal string Id => id;
-    internal string? Tenant { get; init; }
+    internal int? TenantId { get; init; }
     internal ProviderQuotas? Quotas { get; init; }
     internal Action<string>? Stderr { get; init; }
     internal Func<CancellationToken, Task>? ChargeLifecycle { get; init; }
 
     internal void Identify(JsonObject envelope)
     {
-        if (Tenant is not null) envelope["tenant"] = Tenant;
+        if (TenantId is int id) envelope["tenantId"] = id;
     }
     internal int TimeoutSeconds => timeoutSeconds;
     internal string? ParentNode => SessionWait.Text(config["parentNode"]);
@@ -394,10 +394,11 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         JsonObject response
     )
     {
-        if (envelope.ContainsKey("tenant") != response.ContainsKey("tenant")
-            || envelope.ContainsKey("tenant") && SessionWait.Text(response["tenant"]) != SessionWait.Text(envelope["tenant"]))
+        if (envelope.ContainsKey("tenantId") != response.ContainsKey("tenantId")
+            || envelope["tenantId"] is { } expected && (response["tenantId"] is not JsonValue value
+                || !value.TryGetValue<int>(out var actual) || actual != expected.GetValue<int>()))
             throw new NodeProviderException("NODE_PROVIDER_TENANT_MISMATCH", "Provider response identity does not match the request.");
-        Keys(response, ["protocol", "providerId", "requestId", "operation", "ok", "result", "error", "tenant"]);
+        Keys(response, ["protocol", "providerId", "requestId", "operation", "ok", "result", "error", "tenantId"]);
         foreach (var key in new[] { "protocol", "providerId", "requestId", "operation" })
             if (SessionWait.Text(response[key]) != SessionWait.Text(envelope[key]))
                 throw new NodeProviderException(

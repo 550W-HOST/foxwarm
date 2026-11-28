@@ -44,7 +44,7 @@ public sealed partial class ProviderTenancyTests
     }
 
     [Fact]
-    public async Task TenantScopedInventoryAndAllEnvelopesUseTheGrantedSlug()
+    public async Task TenantScopedInventoryAndAllEnvelopesUseTheGrantedId()
     {
         if (!OperatingSystem.IsLinux()) return;
         using var temp = new TempDirectory();
@@ -79,16 +79,18 @@ public sealed partial class ProviderTenancyTests
         // Identical qualified Node IDs in two tenants must use different long-lived streams.
         await a.LifecycleAsync("create", "shared", "shared/common", new(), "session", "main", default);
         await b.LifecycleAsync("create", "shared", "shared/common", new(), "session", "main", default);
-        async Task<string> Owner(NodeProviderRegistry registry) =>
-            (await registry.RequestServiceAsync("shared/common", "vscode-fs", "stat", new(), default))["owner"]!.ToString();
-        Assert.Equal(PostgresServer.Tenant, await Owner(a));
-        Assert.Equal("second", await Owner(b));
-        Assert.Equal(PostgresServer.Tenant, await Owner(a));
+        int firstId = await db.TenantIdAsync(PostgresServer.Tenant);
+        int secondId = await db.TenantIdAsync("second");
+        async Task<int> Owner(NodeProviderRegistry registry) =>
+            (await registry.RequestServiceAsync("shared/common", "vscode-fs", "stat", new(), default))["owner"]!.GetValue<int>();
+        Assert.Equal(firstId, await Owner(a));
+        Assert.Equal(secondId, await Owner(b));
+        Assert.Equal(firstId, await Owner(a));
         var calls = Calls(temp.Path);
         Assert.Equal(2, calls.Count(c => c["operation"]?.ToString() == "connect"));
         Assert.All(calls.Where(c => c.ContainsKey("protocol")),
-            c => Assert.Contains(c["tenant"]?.ToString(), new[] { PostgresServer.Tenant, "second" }));
-        Assert.All(calls.Where(c => c["type"]?.ToString() == "node_service_request"), c => Assert.False(c.ContainsKey("tenant")));
+            c => Assert.Contains(c["tenantId"]!.GetValue<int>(), new[] { firstId, secondId }));
+        Assert.All(calls.Where(c => c["type"]?.ToString() == "node_service_request"), c => Assert.False(c.ContainsKey("tenantId")));
         File.WriteAllText(Path.Combine(temp.Path,"mismatch-list"),"");
         Assert.Equal("NODE_PROVIDER_TENANT_MISMATCH",(await Assert.ThrowsAsync<NodeProviderException>(()=>b.ListAsync(default))).Code);
         File.Delete(Path.Combine(temp.Path,"mismatch-list"));
