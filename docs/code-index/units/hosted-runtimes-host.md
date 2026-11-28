@@ -39,7 +39,7 @@ A P2 replica serves many tenants behind one front. This unit owns where a tenant
 - **Operator-document callback.** Production passes each runtime's `MainHostRuntime.OperatorDocumentsChanged`, which invalidates the runtime's cached ceiling.
 - **Master-host cutover.** The pre-master-host binary at `4c3045596` advertises binary level 1200 but opens an operator tenant's physical Agent folders in scratch. It is not a compatible master-host reader. Replace it in the coordinated P1/P2 cutover before enabling this role; the migration adds no new reader floor.
 - **P1 limitation.** The single-tenant `HostedReplica` has no `foxwarm_operator` listener: its runtime's cached ceiling can outlive an operator edit until the runtime restarts. This ends at the FW cutover, when the runtimes host replaces it; no P1 listener is planned.
-- **Not yet.** Tenant runtimes report themselves never idle, so idle release releases nothing until runtimes report busy work and wake-ups.
+- **Idle release and autonomous activation.** Production generations expose their activity, stop and settle producers, then supply the release deadline. Each replica also runs the [wake-up and recovery scans](./hosted-channels-timers.md).
 
 ## Tests
 

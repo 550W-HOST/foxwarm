@@ -1,0 +1,15 @@
+# Unit: Hosted timers and autonomous tenant activation
+
+Files: `dotnet/Foxwarm/Hosted/Autonomous/Wakeups.cs`, `dotnet/Foxwarm/Hosted/Autonomous/RuntimeWakeups.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Wakeups.cs`, `dotnet/Foxwarm/Timers/MainTimers.Wakeup.cs`, `dotnet/Foxwarm.Tests/Hosted/WakeupScanTests.cs`, `dotnet/Foxwarm.Tests/Hosted/WakeupLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Hosted/RuntimeWakeupSourcesTests.cs`, `dotnet/Foxwarm.Tests/Hosted/TenantReplicaTests.Wakeups.cs`, `dotnet/Foxwarm.Tests/Timers/TimerWakeupTests.cs`
+
+## Scheduled unload and restart
+
+`RuntimeWakeups` supplies the [generation's idle-release transaction](./hosted-runtime.md) with the earliest of the next ordinary timer (two minutes before its scheduled instant), a persisted Session wait deadline, daily journal retention, and the current time if a long-polling channel is configured. Task reminders have no clock. Active transports, executing work, subscribers, and imminent deadlines keep a runtime resident. Once admission latches, the runtime stops its clocks and channel ingress, settles accepted deliveries including their completion saves, then reads the release deadline. An edit accepted before clock shutdown can finish in the timer store's existing save lane; the release uses that revision. The epoch-checked release writes its result atomically with handing back the lease.
+
+Only a scheduled unload nominates a cron occurrence. Its payload identifies the timer, schedule generation and particular scheduled instant; an edit makes an earlier generation inapplicable. During startup the new grant reads its row and reconciles the [ordinary timer store](./tasks-timers.md). A matching occurrence arms even if its time passed during activation. An ordinary restart without a nomination still starts at the next future cron tick; overdue one-shots still fire. The owner clears its row under the new epoch after startup arming. A failed autonomous start leaves a retry deadline; an owner that dies before arming leaves the nomination for recovery. Timer delivery remains best-effort across crashes.
+
+## Scans and placement
+
+Every replica scans due wake-ups and expired active grants at startup and every ten seconds. Each query returns at most 64 rows ordered by due time and tenant ID. A released grant without a wake-up stays released. A live grant, a tenant in backoff, and a tenant for which no eligible role is live are excluded before the limit. The reads neither claim rows nor carry their payloads. The [tenant router](./hosted-forwarding.md) checks local boot eligibility and placement. The activation coordinator coalesces admitted wake-up and recovery attempts with requests and mesh activations.
+
+`WakeupLifecycleTests` runs the production timer store and replica over PostgreSQL, including a cold-builder failure and a crashed grant with an overdue one-shot and no HTTP traffic. `TimerWakeupTests` checks the clean successor and an edit spanning shutdown. `TenantReplicaTests.Wakeups` drives two scans and an HTTP request through the same activation.
