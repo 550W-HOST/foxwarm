@@ -13,26 +13,45 @@ internal static class HostedDirectory
 
     internal static string ExistingDirectory(string path)
     {
-        string resolved;
         if (OperatingSystem.IsWindows())
         {
-            // A lexical Windows path is sufficient only without parent traversal or reparse points.
             if (path.Replace('/', '\\').Split('\\').Contains("..")) throw Unresolved(path);
-            resolved = Path.GetFullPath(path);
-            for (var dir = new DirectoryInfo(resolved); dir is not null; dir = dir.Parent)
+            for (var dir = new DirectoryInfo(path); dir is not null; dir = dir.Parent)
                 if (!dir.Exists || (dir.Attributes & FileAttributes.ReparsePoint) != 0) throw Unresolved(path);
+            return Path.GetFullPath(path);
         }
-        else
-        {
-            // realpath walks links and parent components in filesystem order. Path.GetFullPath
-            // first would change e.g. a symlink target `another-link/../volume`.
-            var buffer = RealPath(path, IntPtr.Zero);
-            if (buffer == IntPtr.Zero) throw Unresolved(path);
-            try { resolved = Marshal.PtrToStringUTF8(buffer) ?? throw Unresolved(path); }
-            finally { Free(buffer); }
-        }
+        var resolved = ExistingPath(path);
         return Directory.Exists(resolved) ? resolved : throw Unresolved(path);
     }
+
+    internal static string ExistingPath(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // Open the resolved object (backup semantics also opens directories). A junction
+            // or relative link is interpreted by the filesystem, including all ancestors.
+            using var handle = CreateFile(path, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+            if (handle.IsInvalid) throw Unresolved(path);
+            var buffer = new System.Text.StringBuilder(32768);
+            var length = GetFinalPathNameByHandle(handle, buffer, (uint)buffer.Capacity, 0);
+            if (length == 0 || length >= buffer.Capacity) throw Unresolved(path);
+            var final = buffer.ToString();
+            return final.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase) ? @"\\" + final[8..]
+                : final.StartsWith(@"\\?\", StringComparison.Ordinal) ? final[4..] : final;
+        }
+        var address = RealPath(path, IntPtr.Zero);
+        if (address == IntPtr.Zero) throw Unresolved(path);
+        try { return Marshal.PtrToStringUTF8(address) ?? throw Unresolved(path); }
+        finally { Free(address); }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "CreateFileW", ExactSpelling = true)]
+    private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(string path, uint access, uint share,
+        IntPtr securityAttributes, uint disposition, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetFinalPathNameByHandleW", ExactSpelling = true)]
+    private static extern uint GetFinalPathNameByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle file,
+        System.Text.StringBuilder path, uint capacity, uint flags);
 
     private static IOException Unresolved(string path) => new($"Cannot resolve an existing directory on the filesystem: {path}.");
 }

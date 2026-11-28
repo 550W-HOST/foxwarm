@@ -50,9 +50,10 @@ internal sealed class FileInstanceCredentials(string dataRoot) : IInstanceCreden
             }
         );
 
-    public string? Read(InstanceCredentialName name)
+    public string? Read(InstanceCredentialName name) => ReadAt(name, PathFor(name));
+
+    internal static string? ReadAt(InstanceCredentialName name, string path)
     {
-        var path = PathFor(name);
         switch (name)
         {
             case InstanceCredentialName.HttpToken:

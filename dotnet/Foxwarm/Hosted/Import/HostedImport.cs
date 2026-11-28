@@ -199,6 +199,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
 
     internal async Task<int> RunAsync()
     {
+        source.CheckFixedInputs();
         Preflight();
         report.Phase("snapshot", () =>
         {
@@ -207,6 +208,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
                     copies[file] = ImportSource.OpenCopy(copy);
             return copies.Count;
         }, count => count);
+        CheckSourceIdentityRanges();
         CheckSourceContent();
         report.Phase("configuration split", () => config = SplitConfiguration(), _ => config?.Blocks.Count ?? 0);
         var plan = report.Phase("plan", Plan, items => items.Count);
@@ -272,7 +274,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
         {
             report.Refuse("state/installation.json can't be read: " + error.Message);
         }
-        var keyPath = InstanceKeys.DefaultPath(source.Root);
+        var keyPath = source.PathOf("keys/secrets.key");
         if (File.Exists(keyPath))
         {
             try
@@ -317,7 +319,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
         {
             var id = SessionCatalog.Text(row["id"])!;
             agents.Add(SessionCatalog.Text(row["agent"])!);
-            var path = Path.Combine(source.State, "sessions", id + ".json");
+            var path = source.PathOf(Path.Combine("state", "sessions", id + ".json"));
             if (!File.Exists(path))
             {
                 report.Warn($"Catalog member {id} has no authority document; it is unavailable in file mode too.");

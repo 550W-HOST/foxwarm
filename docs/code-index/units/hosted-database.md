@@ -143,3 +143,5 @@ Migrations create these by calling `foxwarm_tenant_table(table, privileges)` rig
 ## Open Questions
 
 - A cross-store unit of work over `TenantDb` (one transaction spanning several stores) has no P1 consumer (plan C2). Its sketch stays in the storage-context unit.
+
+`TenantDbTests.SingleConnectionIsReboundAfterAnAbortedWrite` exercises tenant rebinding on the same PostgreSQL backend after rollback and cancellation.
