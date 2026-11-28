@@ -106,6 +106,9 @@ internal sealed partial class ExecutableNodeProvider
                 await finished;
                 remaining.Remove(finished);
             }
+            if (Stderr is not null)
+                foreach (var line in Encoding.UTF8.GetString(await stderr).Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                    Stderr(line.TrimEnd('\r'));
             if (child.ExitCode != 0)
                 throw new NodeProviderException(
                     "NODE_PROVIDER_PROCESS_EXIT",

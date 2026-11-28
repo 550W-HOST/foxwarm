@@ -64,6 +64,12 @@ Agents use qualified IDs in Node selection, file/exec tools and Node lifecycle r
 
 Agents use `node({action:"inspect",providerId:"provider-id"})` to discover the description, supported operations and parameters. `providerId` and `nodeId` are mutually exclusive for inspection. Programmatic `node({action:"list"})` returns structured `nodes`, `providers` and `currentNode` beside readable `output`.
 
+### Per-tenant Providers
+
+An extended driver returns `"tenancy": "per-tenant"` in `describe`. The deployment entry declares the same `tenancy: per-tenant`. On a hosted replica, Core passes `"tenant": "<slug>"` at the top level of every envelope for that driver, including the initial `describe` and service `connect`. The driver must echo the same case-sensitive string on successes and errors. A missing or different echo fails the response. On a persistent service connection, the successful `connect` handshake binds the stream to one tenant for its entire lifetime. The subsequent `node_service_*` frames are unchanged; connections are never pooled or reused across tenants. The `request.nodeId` and all descriptor IDs stay local to that Provider.
+
+A tenant-aware driver must namespace Nodes, files, exec references, processes and service resources by the tenant in the envelope. `list` must include only that tenant's Nodes. Enforce isolation and resource accounting at the driver boundary on every operation, including list, lifecycle and service access. Core can account for starts it is dispatching and executions it still tracks; the driver must also account for processes that outlive a lost start receipt or their Session. Never accept the tenant from the operation's parameters. Ordinary file-mode requests keep the original envelopes. An operator-profile runtime may use a legacy driver without a tenant field; a hosted-profile runtime requires both the extension and a grant.
+
 ## List
 
 `list` returns `{ "nodes": [...] }`. Each descriptor has:
@@ -280,7 +286,7 @@ A provider need not implement the services itself. The CLI Node binary can serve
 
 ### Limits
 
-Each frame in either direction is limited to 72 MiB (a 50 MiB file is about 67 MiB as base64 plus its envelope). An oversize or unterminated frame ends the channel. Core drains the provider's stderr continuously and discards it; the one-shot stderr limit does not apply to a channel, and diagnostics are never returned to callers. The eight active one-shot requests per provider do not count channel requests.
+Each frame in either direction is limited to 72 MiB (a 50 MiB file is about 67 MiB as base64 plus its envelope). An oversize or unterminated frame ends the channel. Core drains the Provider's stderr continuously; a hosted replica tags each diagnostic with its tenant and Provider, and file mode discards it; the one-shot stderr limit does not apply to a channel, and diagnostics are never returned to callers. The eight active one-shot requests per provider do not count channel requests.
 
 ### Lifecycle
 
