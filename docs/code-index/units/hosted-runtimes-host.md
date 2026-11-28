@@ -53,3 +53,5 @@ A P2 replica serves many tenants behind one front. This unit owns where a tenant
   `PlacementTests` covers the rank's stability and order, candidate filtering (role, drain, duplicate logical name, capacity), Q8's master-host rule, acquisition by role and profile with the profile carried in the grant, the placement edit serialized against an in-flight grant in both orders, and the registry's live boots.
 
 `PlacementWaveProcessTests` runs three production replica processes with twenty tenants, scales to four and back, sends fresh authenticated requests at rollout, and observes autonomous recovery after a crash. Nine real busy turns finish during one slow stop. A separate row lock can delay one hand-back without preventing sibling tenants from moving.
+
+The subprocess fixture retries startup on a fresh port set only when the exited child reports an address-in-use bind failure. A health response belongs to the new replica only if its boot ID is registered at the expected mesh address; this distinguishes duplicate logical names. The operator and S3 child fixtures likewise retry actual bind collisions and surface other failures.

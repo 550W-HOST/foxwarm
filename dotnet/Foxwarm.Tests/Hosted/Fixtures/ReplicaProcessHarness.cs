@@ -134,7 +134,7 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
             var replica = await LaunchAsync(name, front, health, mesh, environment, webUi, extraConfig);
             try
             {
-                await replica.ReadyAsync(TimeSpan.FromSeconds(60));
+                await replica.ReadyAsync(TimeSpan.FromSeconds(60), Database, mesh);
                 lock (replicas) replicas.Add(replica);
                 return replica;
             }
@@ -263,7 +263,7 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
                     output.AppendLine(line);
         }
 
-        internal async Task ReadyAsync(TimeSpan limit)
+        internal async Task ReadyAsync(TimeSpan limit, HostedTestDatabase database, int mesh)
         {
             var watch = Stopwatch.StartNew();
             while (true)
@@ -275,20 +275,24 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
                 }
                 try
                 {
-                    var status = await StatusAsync();
-                    if ((bool?)status["ready"] == true && (string?)status["replica"] is { } boot
-                        && Foxwarm.Hosted.Lease.ReplicaRegistry.LogicalName(boot) == Name)
+                    using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                    var status = await StatusAsync(bound.Token);
+                    if (status["ready"] is JsonValue ready && ready.TryGetValue<bool>(out var serving) && serving
+                        && status["replica"] is JsonValue id && id.TryGetValue<string>(out var boot)
+                        && Foxwarm.Hosted.Lease.ReplicaRegistry.LogicalName(boot) == Name
+                        && await database.ScalarAsync("SELECT mesh_address FROM replicas WHERE replica_id=$1", boot) as string == $"http://127.0.0.1:{mesh}")
                         return;
                 }
                 catch (HttpRequestException) { }
+                catch (OperationCanceledException) { } // A different process may accept TCP without answering.
                 catch (System.Text.Json.JsonException) { } // Another listener may occupy the sampled health port.
                 Assert.True(watch.Elapsed < limit, $"replica {Name} didn't become ready:\n{Output}");
                 await Task.Delay(100);
             }
         }
 
-        internal async Task<JsonObject> StatusAsync() =>
-            JsonNode.Parse(await client.GetStringAsync($"http://127.0.0.1:{HealthPort}/status"))!.AsObject();
+        internal async Task<JsonObject> StatusAsync(CancellationToken token = default) =>
+            JsonNode.Parse(await client.GetStringAsync($"http://127.0.0.1:{HealthPort}/status", token))!.AsObject();
 
         /// <summary>A request through this replica's front, as for the tenant's host.</summary>
         internal async Task<HttpResponseMessage> GetAsync(

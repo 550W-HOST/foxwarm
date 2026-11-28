@@ -58,8 +58,11 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
     private static async Task<int> TenantsAsync(ReplicaProcessHarness.Replica replica) =>
         (int)(await replica.StatusAsync())["tenants"]!;
 
-    [Fact]
-    public async Task AFreshPortReplacesAnEdgeWhosePublicBindFailed()
+    [Theory]
+    [InlineData(1)] // public
+    [InlineData(2)] // health
+    [InlineData(3)] // mesh
+    public async Task AFreshPortReplacesAnEdgeWhoseListenerBindFailed(int occupiedSample)
     {
         await using var cluster = await ReplicaProcessHarness.CreateAsync();
         await cluster.AddTenantAsync("collision");
@@ -67,7 +70,7 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
         occupied.Start();
         var busy = ((IPEndPoint)occupied.LocalEndpoint).Port;
         var samples = 0;
-        var edge = await cluster.StartAsync("edge", samplePort: () => ++samples == 1 ? busy : ChildListenerPorts.Sample());
+        var edge = await cluster.StartAsync("edge", samplePort: () => ++samples == occupiedSample ? busy : ChildListenerPorts.Sample());
         Assert.NotEqual(busy, edge.FrontPort);
         Assert.Equal(1L,await cluster.Database.ScalarAsync("SELECT count(*) FROM replicas WHERE split_part(replica_id,'/',1)='edge'"));
         using var response = await edge.GetAsync("collision");
