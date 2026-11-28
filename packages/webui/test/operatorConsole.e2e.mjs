@@ -58,7 +58,7 @@ test('operator console signs in, edits limits and journal, follows placement and
           tenants: [
             {
               slug: 'alpha',
-              owner: 'primary',
+              owner: 'general-replica-2',
               hot: 2,
               busy: 1,
               providerProblems: {
@@ -70,7 +70,7 @@ test('operator console signs in, edits limits and journal, follows placement and
           ],
           replicas: [
             {
-              name: 'primary',
+              name: 'general-replica-2',
               role: 'general',
               version: 'test',
               draining: false,
@@ -118,6 +118,12 @@ test('operator console signs in, edits limits and journal, follows placement and
     await page.type('#token', bearer)
     await page.click('#access button')
     await page.waitForSelector('#tenantRows button', { visible: true })
+    const lineCount = (cell) => {
+      const range = document.createRange()
+      range.selectNodeContents(cell)
+      return range.getClientRects().length
+    }
+    assert.equal(await page.$eval('#tenantRows td:nth-child(3)', lineCount), 1)
     await page.click('#tenantRows button')
     assert.deepEqual(await page.$$eval('#providerStatus li', (items) => items.map((item) => item.textContent)), [
       'pool: tenancy mismatch',
@@ -146,7 +152,8 @@ test('operator console signs in, edits limits and journal, follows placement and
     await page.click('#stateAction')
     await page.waitForFunction(() => document.querySelector('#stateAction').textContent === 'Suspend tenant')
     await page.click('#showReplicas')
-    assert.equal(await page.$eval('#replicaRows tr td', (e) => e.textContent), 'primary')
+    assert.equal(await page.$eval('#replicaRows tr td', (e) => e.textContent), 'general-replica-2')
+    assert.equal(await page.$eval('#replicaRows tr td', lineCount), 1)
     assert.equal(await page.$eval('#detail', (e) => e.hidden), true)
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
     assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0)
