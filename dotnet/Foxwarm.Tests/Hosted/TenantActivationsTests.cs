@@ -10,7 +10,7 @@ namespace Foxwarm.Tests.Hosted;
 // Coalesced activation, exact generations and idle release (plan §2.3),
 // over the real lease rows with runtimes the test drives.
 [Trait("Backend", "postgres")]
-public sealed class TenantActivationsTests
+public sealed partial class TenantActivationsTests
 {
     private const string Tenant = PostgresServer.Tenant;
     private const string Replica = "replica-a/0001";
@@ -96,6 +96,7 @@ public sealed class TenantActivationsTests
         internal bool Idle = true;
         internal WakeupDue? NextDue;
         internal Exception? BuildFailure;
+        internal Func<ActivationContext, Task>? DuringBuild;
         internal readonly TaskCompletionSource<long> Exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int Exits;
 
@@ -126,6 +127,7 @@ public sealed class TenantActivationsTests
         {
             Interlocked.Increment(ref Builds);
             FactoryEntered.TrySetResult();
+            if (DuringBuild is { } during) await during(context);
             if (BuildFailure is { } failure)
                 throw failure;
             // A factory that ignores cancellation, as a slow composition can.

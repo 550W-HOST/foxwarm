@@ -612,6 +612,7 @@ internal sealed class TenantActivations : IAsyncDisposable
             generation = Register(slot, held);
             var id = generation.Id;
             using var starting = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token, generation.Fence.Lost);
+            using var abortProducers = starting.Token.Register(() => _ = generation.Gate.AbortStartupAsync());
             WakeupRow? wakeup = null;
             IGenerationRuntime runtime;
             try
@@ -623,7 +624,10 @@ internal sealed class TenantActivations : IAsyncDisposable
             catch (Exception error)
             {
                 // A factory that fails cleans up what it built; one whose cleanup failed says so.
+                await generation.Gate.AbortStartupAsync().ConfigureAwait(false);
                 var confirmed = error is not StartupCleanupFailedException;
+                if (confirmed)
+                    await generation.Gate.DrainedAsync().ConfigureAwait(false);
                 generation.Settle(StopResult.Now(confirmed));
                 if (confirmed)
                     await FailedStartAsync(slot, held, wakeup).ConfigureAwait(false);
@@ -708,8 +712,14 @@ internal sealed class TenantActivations : IAsyncDisposable
     }
 
     // Disposes a runtime that was built but never served; confirmed only by a clean disposal.
-    private static async Task<StopResult> DisposeBuiltAsync(TenantGeneration generation) =>
-        await StopResult.Of(generation.DisposeOnceAsync()).ConfigureAwait(false);
+    private static async Task<StopResult> DisposeBuiltAsync(TenantGeneration generation)
+    {
+        await generation.Gate.AbortStartupAsync().ConfigureAwait(false);
+        var result = await StopResult.Of(generation.DisposeOnceAsync()).ConfigureAwait(false);
+        if (result.Confirmed)
+            await generation.Gate.DrainedAsync().ConfigureAwait(false);
+        return result;
+    }
 
     // The failure of a build or start, as the caller sees it: a fenced generation failed
     // because its grant was lost.
