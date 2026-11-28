@@ -153,11 +153,13 @@ internal sealed partial class NodeProviderRegistry
             var description = await provider.DescribeAsync(token);
             if (!description["lifecycle"]!.AsArray().Any(item => SessionWait.Text(item) == action))
                 throw Unsupported(provider.Id, action);
-            if (creating && nodeId is null)
-                _ = await DiscoverProviderAsync(provider, token, mutation);
+            JsonArray? inventory = null;
+            if (creating && (nodeId is null || provider.Quotas is not null))
+                inventory = await DiscoverProviderAsync(provider, token, mutation);
             if (creating && nodeId is not null)
             {
-                var existing = await ResolveAsync(nodeId, token, mutation);
+                var existing = inventory is null ? await ResolveAsync(nodeId, token, mutation)
+                    : inventory.OfType<JsonObject>().FirstOrDefault(item => SessionWait.Text(item["id"]) == nodeId);
                 if (
                     action == "create"
                     && (existing is not null || native.Registry.Forest().Contains(nodeId))
@@ -199,6 +201,18 @@ internal sealed partial class NodeProviderRegistry
             if (nodeId is not null)
                 request["nodeId"] = nodeId[(provider.Id.Length + 1)..];
             var before = native.Registry.Forest();
+            if (creating && provider.Quotas is { } quotas && inventory!.Count >= quotas.Nodes)
+            {
+                var ensuresExisting = action == "ensure" && nodeId is not null
+                    && inventory.OfType<JsonObject>().Any(node => SessionWait.Text(node["id"]) == nodeId);
+                if (!ensuresExisting)
+                    throw new NodeProviderException(
+                        "NODE_PROVIDER_NODE_LIMIT",
+                        $"This tenant has reached its limit of {quotas.Nodes} Nodes on Provider '{provider.Id}'. Remove a Node to create another."
+                    );
+            }
+            if (provider.ChargeLifecycle is { } charge)
+                await charge(token).ConfigureAwait(false);
             var result = await provider.LifecycleAsync(action, request, token);
             var returned =
                 action == "destroy"

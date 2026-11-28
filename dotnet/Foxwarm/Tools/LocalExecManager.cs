@@ -24,7 +24,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     );
     private readonly SemaphoreSlim mutation = new(1, 1);
     private readonly SemaphoreSlim reconciliation = new(1, 1);
-    private readonly HashSet<string> reserved = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string?> reserved = new(StringComparer.Ordinal);
     private readonly List<string> recent = [];
     private readonly object initializationGate = new();
     private Task? registration;
@@ -357,11 +357,21 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
     }
 
-    private async Task<string> ReserveAsync(string session)
+    private async Task<string> ReserveAsync(string session, ProviderExecBackend? provider)
     {
         await mutation.WaitAsync();
         try
         {
+            if (provider?.ConcurrentLimit is int limit)
+            {
+                var used = pending.Values.Count(record => record.ProviderId == provider.ProviderId)
+                    + reserved.Count(pair => pair.Value == provider.ProviderId && !pending.ContainsKey(pair.Key));
+                if (used >= limit)
+                    throw new NodeProviderException(
+                        "NODE_PROVIDER_EXEC_LIMIT",
+                        $"This tenant has reached its limit of {limit} concurrent executions on Provider '{provider.ProviderId}'. Wait for one to finish."
+                    );
+            }
             for (var attempt = 0; attempt < 128; attempt++)
             {
                 var id =
@@ -378,12 +388,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                     ];
                 if (
                     pending.ContainsKey(id)
-                    || reserved.Contains(id)
+                    || reserved.ContainsKey(id)
                     || recent.Contains(id)
                     || RemoteIdentityReserved?.Invoke(session, id) == true
                 )
                     continue;
-                reserved.Add(id);
+                reserved.Add(id, provider?.ProviderId);
                 return id;
             }
             throw new IOException(
@@ -482,7 +492,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             }
         // A supported identity move may commit while reservation or start is awaiting a receipt.
         var agent = agentForSession(sessionId);
-        var id = await ReserveAsync(sessionId);
+        var id = await ReserveAsync(sessionId, backend);
         ExecRecord record;
         try
         {
