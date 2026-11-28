@@ -15,8 +15,9 @@ internal static class OperatorCli
                foxwarm operator token create
                foxwarm operator --url ORIGIN --token-file FILE COMMAND
         Commands:
-          tenants | placement
+          tenants | placement | deletions
           tenant create SLUG PROFILE HOSTNAME | tenant get SLUG | tenant rotate SLUG | tenant set SLUG JSON-FILE
+          tenant suspend SLUG | tenant resume SLUG | tenant delete SLUG
           ceiling get PROFILE | ceiling set PROFILE JSON-FILE
         """;
 
@@ -70,6 +71,10 @@ internal static class OperatorCli
             ["tenant", "create", var slug, var profile, var hostname] => (HttpMethod.Post, "/tenants", new JsonObject { ["slug"] = slug, ["profile"] = profile, ["primaryHostname"] = hostname }.ToJsonString()),
             ["tenant", "set", var slug, var file] => (HttpMethod.Patch, Tenant(slug), await File.ReadAllTextAsync(file, token)),
             ["tenant", "rotate", var slug] => (HttpMethod.Post, Tenant(slug) + "/rotate", null),
+            ["tenant", "suspend", var slug] => (HttpMethod.Post, Tenant(slug) + "/suspend", null),
+            ["tenant", "resume", var slug] => (HttpMethod.Post, Tenant(slug) + "/resume", null),
+            ["tenant", "delete", var slug] => (HttpMethod.Delete, Tenant(slug), null),
+            ["deletions"] => (HttpMethod.Get, "/deletions", null),
             ["placement"] => (HttpMethod.Get, "/placement", null),
             ["ceiling", "get", var profile] => (HttpMethod.Get, Ceiling(profile), null),
             ["ceiling", "set", var profile, var file] => (HttpMethod.Put, Ceiling(profile), await File.ReadAllTextAsync(file, token)),

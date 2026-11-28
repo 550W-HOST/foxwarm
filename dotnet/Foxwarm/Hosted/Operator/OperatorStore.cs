@@ -11,7 +11,7 @@ internal sealed class OperatorProblem(int status, string message) : Exception(me
     internal int Status { get; } = status;
 }
 
-internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
+internal sealed partial class OperatorStore(PgDatabase database, KeyEncryptionKey kek, Blobs.S3BlobSettings? deletionS3 = null)
 {
     internal static readonly TimeSpan SetupLifetime = TimeSpan.FromHours(24);
     internal const string Applied = "Applies within one lease renewal, usually at once. New requests use the new settings, and running work is allowed to finish.";
@@ -55,7 +55,7 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
             await RequireCurrentReplicas(tx, ct);
             var id = (int)(await Scalar(tx, "INSERT INTO tenants(name,profile,pinned_role,credential_version) VALUES ($1,$2,$3,1) RETURNING tenant_id", ct, slug, profile, Pin(profile)))!;
             var setup = await IssueSetupAsync(tx, id, 1, ct);
-            await tx.ExecuteAsync("INSERT INTO tenant_leases(tenant_id,epoch,state,expires_at) VALUES ($1,1,'active',now()+interval '30 seconds')", ct, id);
+            await tx.ExecuteAsync("INSERT INTO tenant_leases(tenant_id,epoch,state) VALUES ($1,1,'active')", ct, id);
             var keyId = InstanceKeys.NewKeyId();
             var key = RandomNumberGenerator.GetBytes(InstanceKeys.KeyBytes);
             try
@@ -64,7 +64,6 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
                 await tx.ExecuteAsync("SELECT foxwarm_provision_key($1,$2,$3,$4,$5)", ct, id, keyId, kek.KeyId, nonce, wrapped);
             }
             finally { CryptographicOperations.ZeroMemory(key); }
-            await tx.ExecuteAsync("UPDATE tenant_leases SET state='released', expires_at=now() WHERE tenant_id=$1", ct, id);
             await tx.ExecuteAsync("INSERT INTO tenant_hostnames(tenant_id,hostname,kind) VALUES ($1,$2,'primary')", ct, id, hostname);
             return new JsonObject { ["slug"] = slug, ["setupToken"] = setup };
         }, token);
@@ -72,14 +71,14 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
     private const string TenantJson = """
         SELECT jsonb_build_object('slug',name,'profile',profile,'state',state,'limits',limits,'journal',settings->'journal',
             'primaryHostname',(SELECT hostname FROM tenant_hostnames h WHERE h.tenant_id=t.tenant_id AND kind='primary'),
-            'ceiling',(SELECT text FROM operator_documents d WHERE d.tenant_id=t.tenant_id AND d.name='ceiling')) AS item FROM tenants t
+            'ceiling',(SELECT text FROM operator_documents d WHERE d.tenant_id=t.tenant_id AND d.name='ceiling')) || CASE WHEN t.state='deleting' AND coalesce((SELECT d.objects_pending FROM operator_deletions d WHERE d.tenant_id=t.tenant_id), $1) THEN '{"objectsPending":true}'::jsonb ELSE '{}'::jsonb END AS item FROM tenants t
         """;
 
     internal Task<JsonNode> ReadAsync(string? slug, CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
     {
         var text = slug is null
-            ? await Scalar(tx, "SELECT coalesce(jsonb_agg(item ORDER BY item->>'slug'), '[]')::text FROM (" + TenantJson + ") rows", ct)
-            : await Scalar(tx, "SELECT item::text FROM (" + TenantJson + " WHERE name=$1) rows", ct, slug);
+            ? await Scalar(tx, "SELECT coalesce(jsonb_agg(item ORDER BY item->>'slug'), '[]')::text FROM (" + TenantJson + ") rows", ct, deletionS3 is not null)
+            : await Scalar(tx, "SELECT item::text FROM (" + TenantJson + " WHERE name=$2) rows", ct, deletionS3 is not null, slug);
         return JsonNode.Parse(text as string ?? throw Missing())!;
     }, token);
 
@@ -111,9 +110,28 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
 
     private static async Task RequireCurrentReplicas(PgTx tx, CancellationToken ct)
     {
-        if (await Scalar(tx, "SELECT 1 FROM tenant_leases l LEFT JOIN replicas r ON r.replica_id=l.owner_replica WHERE l.state='active' AND l.expires_at>clock_timestamp() AND (r.binary_level IS NULL OR r.binary_level<1200) LIMIT 1", ct) is int)
+        if (await Scalar(tx, IncompatibleServingOwners + " LIMIT 1", ct, 1200) is int)
             throw new OperatorProblem(409, "Finish upgrading all live replicas before creating a tenant or rotating its access token.");
     }
+
+    private static async Task RequireLifecycleReplicasAsync(PgTx tx, CancellationToken ct)
+    {
+        const string incompatible = """
+            SELECT 1 FROM replicas WHERE binary_level<$1 AND heartbeat_at>clock_timestamp()-make_interval(secs=>$2)
+            UNION ALL
+            """ + "\n" + IncompatibleServingOwners + " LIMIT 1";
+        if (await Scalar(tx, incompatible, ct, 1201, Lease.LeaseTimings.Default.Ttl.TotalSeconds) is int)
+            throw new OperatorProblem(409, "Finish upgrading all live replicas before suspending or deleting a tenant.");
+    }
+
+    // Lease expiry is independent of heartbeat freshness. Imports use an unregistered
+    // migration-role lease, but neither import state can serve tenant requests.
+    private const string IncompatibleServingOwners = """
+        SELECT 1 FROM tenant_leases l JOIN tenants t USING(tenant_id)
+        LEFT JOIN replicas r ON r.replica_id=l.owner_replica
+        WHERE l.state='active' AND l.expires_at>clock_timestamp() AND t.state NOT IN ('importing','importing-agents')
+            AND (r.binary_level IS NULL OR r.binary_level<$1)
+        """;
 
     private static async Task<string> IssueSetupAsync(PgTx tx, int id, long version, CancellationToken ct)
     {
@@ -128,7 +146,17 @@ internal sealed class OperatorStore(PgDatabase database, KeyEncryptionKey kek)
 
     internal Task<JsonObject> UpdateAsync(string slug, JsonObject edits, CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
     {
-        var id = (int?)await Scalar(tx, "SELECT tenant_id FROM tenants WHERE name=$1 FOR UPDATE", ct, slug) ?? throw Missing();
+        int id;
+        await using (var command = tx.Command("SELECT tenant_id,profile,state FROM tenants WHERE name=$1 FOR UPDATE", slug))
+        await using (var row = await command.ExecuteReaderAsync(ct))
+        {
+            if (!await row.ReadAsync(ct)) throw Missing();
+            // Crossing this boundary would open different Agent folders on the next activation.
+            if (edits["profile"] is { } requested && (row.GetString(1) == "operator") != ((string)requested == "operator"))
+                throw new OperatorProblem(409, "A tenant can't move between the operator profile and a hosted profile, because its Agent folders would stay behind.");
+            if (row.GetString(2) == "deleting") throw Missing();
+            id = row.GetInt32(0);
+        }
         foreach (var (field, value) in edits)
         {
             switch (field)

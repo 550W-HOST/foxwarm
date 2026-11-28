@@ -140,14 +140,24 @@ public sealed class OperatorProcessTests
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Put, "/profiles/hosted/ceiling", ceiling)).Status);
             Assert.Equal((string?)ceiling["ceiling"], (string?)(await Call(HttpMethod.Get, "/profiles/hosted/ceiling")).Json["ceiling"]);
             var edits = new JsonObject { ["primaryHostname"] = "alpha.test", ["ceiling"] = ceiling["ceiling"]!.DeepClone(), ["profile"] = "operator" };
-            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", edits)).Status);
-            Assert.Equal("operator", (string?)(await Call(HttpMethod.Get, "/tenants/alpha")).Json["profile"]);
-            Assert.Equal("master-host", await db.ScalarAsync("SELECT pinned_role FROM tenants WHERE name='alpha'"));
+            var promotion = await Call(HttpMethod.Patch, "/tenants/alpha", edits);
+            Assert.Equal(HttpStatusCode.Conflict, promotion.Status);
+            Assert.Equal("hosted", (string?)(await Call(HttpMethod.Get, "/tenants/alpha")).Json["profile"]);
             edits["profile"] = "hosted";
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", edits)).Status);
-            Assert.True(await db.ScalarAsync("SELECT pinned_role IS NULL FROM tenants WHERE name='alpha'") is true);
+            Assert.Equal((string?)edits["ceiling"], (string?)(await Call(HttpMethod.Get, "/tenants/alpha")).Json["ceiling"]);
             var master = new JsonObject { ["slug"] = "control", ["profile"] = "operator", ["primaryHostname"] = "control.test" };
             Assert.Equal(HttpStatusCode.Created, (await Call(HttpMethod.Post, "/tenants", master)).Status);
+            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Post, "/tenants/control/suspend")).Status);
+            var editFile = Path.Combine(root.Path, "edit.json");
+            await File.WriteAllTextAsync(editFile, "{\"profile\":\"hosted\"}");
+            using (var demotion = Launch(db.OperatorConnectionString, "--url", origin, "--token-file", tokenFile, "tenant", "set", "control", editFile))
+            {
+                var error = demotion.StandardError.ReadToEndAsync();
+                await demotion.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(25));
+                Assert.Equal(1, demotion.ExitCode);
+                Assert.Equal((string?)promotion.Json["error"], (string?)JsonNode.Parse(await error)!["error"]);
+            }
             Assert.Equal("master-host", await db.ScalarAsync("SELECT pinned_role FROM tenants WHERE name='control'"));
             var replica = await harness.StartAsync("general", new Dictionary<string,string> { ["FOXWARM_KEK_FILE"] = key });
             var front = $"http://127.0.0.1:{replica.FrontPort}";
@@ -167,6 +177,43 @@ public sealed class OperatorProcessTests
             await db.ExecuteOwnerAsync("UPDATE replicas SET capacity=jsonb_set(capacity, '{tenants,alpha,epoch}', '-1')");
             Assert.Null((await Call(HttpMethod.Get, "/placement")).Json["tenants"]!.AsArray().Single(t => (string?)t!["slug"] == "alpha")!["hot"]);
             var epoch = await harness.EpochAsync("alpha");
+            // The operator owns both limits. Change which one is tighter and verify the real
+            // multipart route reads the effective minimum from each replacement generation.
+            foreach (var (upload, agentFile) in new[] { (131072, 65536), (65536, 131072) })
+            {
+                var limits = new JsonObject { ["uploadBytes"] = upload, ["agentFileBytes"] = agentFile };
+                Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", new JsonObject { ["limits"] = limits })).Status);
+                var previous = epoch;
+                await Until(async () => (await AsAdmin(reusable, "/health")).Status == HttpStatusCode.OK && await harness.EpochAsync("alpha") > previous);
+                epoch = await harness.EpochAsync("alpha");
+                foreach (var (bytes, status) in new[] { (65536, HttpStatusCode.OK), (65537, HttpStatusCode.RequestEntityTooLarge) })
+                {
+                    using var uploadRequest = new HttpRequestMessage(HttpMethod.Post, front + "/api/upload") { Content = new MultipartFormDataContent
+                    {
+                        { new ByteArrayContent(new byte[bytes]), "file", "sample.txt" },
+                    } };
+                    uploadRequest.Headers.Host = "alpha.test";
+                    uploadRequest.Headers.Authorization = new("Bearer", reusable);
+                    using var uploaded = await client.SendAsync(uploadRequest);
+                    Assert.Equal(status, uploaded.StatusCode);
+                }
+            }
+            // The same running replica sees a different row whose first serving epoch repeats.
+            var repeated = new JsonObject { ["slug"] = "reused", ["profile"] = "hosted", ["primaryHostname"] = "reused.test" };
+            long? firstEpoch = null;
+            for (var generation = 0; generation < 2; generation++)
+            {
+                var token = (string)(await Call(HttpMethod.Post, "/tenants", repeated)).Json["setupToken"]!;
+                var served = await Send(client, HttpMethod.Post, front + "/api/auth", "reused.test", body:new JsonObject { ["token"] = token });
+                Assert.Equal(HttpStatusCode.OK, served.Status);
+                var current = await harness.EpochAsync("reused");
+                if (firstEpoch.HasValue) Assert.Equal(firstEpoch.Value, current);
+                else firstEpoch = current;
+                Assert.Equal(HttpStatusCode.OK,(await Call(HttpMethod.Post,"/tenants/reused/suspend")).Status);
+                Assert.Equal(HttpStatusCode.Accepted,(await Call(HttpMethod.Delete,"/tenants/reused")).Status);
+                await Until(async ()=>(await Call(HttpMethod.Get,"/tenants/reused")).Status == HttpStatusCode.NotFound);
+            }
+            Assert.Empty((await Call(HttpMethod.Get,"/deletions")).Json.AsArray());
             var changed = new JsonObject { ["limits"] = new JsonObject { ["requestsPerSecond"] = 1, ["requestBurst"] = 1, ["dbStatements"] = 2, ["agentStoreFiles"] = 200 }, ["journal"] = new JsonObject { ["enabled"] = false, ["retentionDays"] = 2 } };
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", changed)).Status);
             await Until(async () => { await AsAdmin(reusable, "/health"); return await harness.EpochAsync("alpha") > epoch; });
@@ -215,6 +262,25 @@ public sealed class OperatorProcessTests
                 var reply = await Redeem(nextSetup);
                 return reply.Status == HttpStatusCode.Unauthorized && (string?)reply.Json["code"] == "setup_expired";
             });
+            // A previously resolved hostname is sent straight to its old owner. Suspension
+            // must stop its generation even with a warm hostname cache. Resumption serves
+            // through a newly acquired epoch; deletion permanently fences the old one.
+            Assert.Equal(HttpStatusCode.Conflict, (await Call(HttpMethod.Delete, "/tenants/alpha")).Status);
+            var previousEpoch = await harness.EpochAsync("alpha");
+            var suspended = JsonNode.Parse(await Cli("--url", origin, "--token-file", tokenFile, "tenant", "suspend", "alpha"))!;
+            Assert.Equal("suspended", (string?)suspended["state"]);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, (await AsAdmin(reusable, "/health")).Status);
+            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Post, "/tenants/alpha/suspend")).Status);
+            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Post, "/tenants/alpha/resume")).Status);
+            await Until(async () =>
+            {
+                var served = await Redeem(nextSetup);
+                return served.Status == HttpStatusCode.Unauthorized && (string?)served.Json["code"] == "setup_expired" && await harness.EpochAsync("alpha") > previousEpoch;
+            });
+            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Post, "/tenants/alpha/suspend")).Status);
+            Assert.Equal(HttpStatusCode.Accepted, (await Call(HttpMethod.Delete, "/tenants/alpha")).Status);
+            await Until(async () => (await Call(HttpMethod.Get, "/tenants/alpha")).Status == HttpStatusCode.NotFound);
+            Assert.Equal(HttpStatusCode.NotFound, (await AsAdmin(reusable, "/health")).Status);
         }
         finally
         {

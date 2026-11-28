@@ -54,6 +54,10 @@ spec:
             items:
               - {key: database-url, path: database-url}
               - {key: kek.json, path: kek.json}
+              {{- if eq (include "foxwarm.s3" .) "true" }}
+              - {key: s3-access-key-id, path: s3-access-key-id}
+              - {key: s3-secret-access-key, path: s3-secret-access-key}
+              {{- end }}
         - name: scratch
           emptyDir: {}
 ---

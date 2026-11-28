@@ -351,6 +351,11 @@ internal enum PutOutcome
 /// <summary>The S3 client, key layout and conditional-write probe of the S3 blob backend.</summary>
 internal static class S3Blobs
 {
+    // Bounds the entire dispatched PUT, including SDK retries; deletion waits an extra
+    // lease TTL plus this timeout before its settled listing. A later receipt rechecks
+    // already-dispatched PUTs that may still reach storage after caller cancellation.
+    internal static readonly TimeSpan PutTimeout = TimeSpan.FromSeconds(100);
+
     internal const string ProbeKey = ".probe/conditional-write";
 
     /// <summary>The key prefix of one tenant's blobs in the bucket.</summary>
@@ -463,7 +468,9 @@ internal static class S3Blobs
             request.IfNoneMatch = "*";
         try
         {
-            await client.PutObjectAsync(request, token).ConfigureAwait(false);
+            using var bound = CancellationTokenSource.CreateLinkedTokenSource(token);
+            bound.CancelAfter(PutTimeout);
+            await client.PutObjectAsync(request, bound.Token).ConfigureAwait(false);
             return PutOutcome.Created;
         }
         catch (AmazonS3Exception error) when (conditional && error.StatusCode == HttpStatusCode.PreconditionFailed)

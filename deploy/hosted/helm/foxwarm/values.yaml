@@ -13,7 +13,8 @@ imagePullSecrets: []
 replicaCount: 2
 
 # Separate control plane; enable with a multi-tenant deployment.url and an operator-only
-# Secret containing database-url and kek.json. Route its Service only on operator.url.
+# Secret containing database-url, kek.json and, for S3, its own s3-access-key-id and
+# s3-secret-access-key. Route its Service only on operator.url.
 operator:
   enabled: false
   existingSecret: ""

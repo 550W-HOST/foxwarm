@@ -65,9 +65,10 @@ services:
         mkdir -p /data/foxwarm &&
         ROOT_ACCESS_KEY_ID="$$(cat /run/secrets/s3-access-key-id)"
         ROOT_SECRET_ACCESS_KEY="$$(cat /run/secrets/s3-secret-access-key)"
-        exec versitygw --port :7070 posix /data
+        exec versitygw --port :7070 --iam-dir /iam posix /data
     volumes:
       - objects:/data
+      - object-iam:/iam
     networks: [backend]
 
   # Applies the schema migrations with the schema owner's URL, then exits. Run it before
@@ -101,6 +102,19 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  operator-s3:
+    profiles: [operator]
+    image: curlimages/curl:8.14.1
+    read_only: true
+    entrypoint: ["/bin/sh", "/setup/operator-s3.sh"]
+    volumes:
+      - ./operator-s3.sh:/setup/operator-s3.sh:ro
+      - ./operator-s3-policy.json:/setup/operator-s3-policy.json:ro
+    secrets: [s3-access-key-id, s3-secret-access-key, operator-s3-access-key-id, operator-s3-secret-access-key]
+    tmpfs: [/tmp]
+    networks: [backend]
+    depends_on: [versitygw]
+
   operator:
     profiles: [operator]
     image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
@@ -110,11 +124,13 @@ services:
     depends_on:
       operator-login:
         condition: service_completed_successfully
+      operator-s3:
+        condition: service_completed_successfully
     environment:
       FOXWARM_ROLE: operator
       FOXWARM_DATABASE_URL_FILE: /run/secrets/operator-database-url
       FOXWARM_KEK_FILE: /run/secrets/kek
-    secrets: [operator-database-url, kek]
+    secrets: [operator-database-url, kek, operator-s3-access-key-id, operator-s3-secret-access-key]
     volumes:
       - ./deployment.operator.yaml:/etc/foxwarm/deployment.yaml:ro
     tmpfs:
@@ -159,12 +175,17 @@ networks:
 volumes:
   postgres: {}
   objects: {}
+  object-iam: {}
 
 secrets:
   postgres-password:
     file: ./secrets/postgres-password
   owner-password:
     file: ./secrets/owner-password
+  operator-s3-access-key-id:
+    file: ./secrets/operator-s3-access-key-id
+  operator-s3-secret-access-key:
+    file: ./secrets/operator-s3-secret-access-key
   operator-password:
     file: ./secrets/operator-password
   operator-database-url:
