@@ -5,7 +5,7 @@ using Foxwarm.Hosted.Runtimes;
 namespace Foxwarm.Tests.Hosted;
 
 [Trait("Backend", "postgres")]
-public sealed class WakeupScanTests
+public sealed partial class WakeupScanTests
 {
     [Fact]
     public async Task EligibleWorkIsSelectedBeforeTheLimitAndWithoutClaimingIt()
@@ -28,12 +28,13 @@ public sealed class WakeupScanTests
             """);
         var attempted = new ConcurrentBag<(string, ActivationCause)>();
         var errors = new ConcurrentQueue<string>();
-        var scan = new Wakeups(db.OpenApp(), TimeSpan.FromMinutes(1), (slug, grace, _) =>
+        var scan = new Wakeups(db.OpenApp(), TimeSpan.FromMinutes(1), "general", 2, (slug, grace, _) =>
         {
             Assert.Equal(slug != "soon", grace);
             return Task.FromResult(true);
         }, (slug, cause, _) => { attempted.Add((slug, cause)); return Task.CompletedTask; }, errors.Enqueue);
-        await scan.ScanAsync(default);
+        await scan.DiscoverAsync(default);
+        await scan.DrainAsync();
         Assert.Empty(errors);
         Assert.Equal(new[] { ("due", ActivationCause.Wakeup), ("recover", ActivationCause.Recovery), ("soon", ActivationCause.Wakeup) },
             attempted.OrderBy(item => item.Item1, StringComparer.Ordinal));

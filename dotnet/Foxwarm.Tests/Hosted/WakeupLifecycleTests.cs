@@ -12,12 +12,13 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Tests.Hosted;
 
 [Trait("Backend", "postgres")]
-public sealed class WakeupLifecycleTests
+public sealed partial class WakeupLifecycleTests
 {
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task NoTrafficTimerSurvivesAReleasedCronOrCrashedOneShot(bool cron)
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task NoTrafficTimerSurvivesAReleasedCronOrCrashedOneShot(bool cron, bool failAfterDelivery)
     {
         await using var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
         var slug = PostgresServer.Tenant;
@@ -37,10 +38,21 @@ public sealed class WakeupLifecycleTests
             { Mesh = new(new(IPAddress.Loopback, 0), "127.0.0.1", System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)) }, app, db.AppConnectionString,
             async (context, ct) =>
             {
-                if (Interlocked.Exchange(ref failStarts, 0) == 1)
-                    throw new IOException("Cold builder unavailable");
+                var fail = Interlocked.Exchange(ref failStarts, 0) == 1;
+                if (fail && !failAfterDelivery) throw new IOException("Cold builder unavailable");
+                var built = (MainHostRuntime)await HostedEntry.CreateTenantRuntimeAsync(context, bootstrap, deployment, ct);
+                if (fail)
+                {
+                    await using (built)
+                    {
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        while (await db.ScalarAsync("SELECT jsonb_array_length(text::jsonb#>'{timers,0,recentRuns}')=1 FROM state_documents WHERE name='timers'") is not true)
+                            await Task.Delay(20,timeout.Token);
+                    }
+                    throw new IOException("Cold start failed after delivery");
+                }
                 Interlocked.Increment(ref starts);
-                return runtime = (MainHostRuntime)await HostedEntry.CreateTenantRuntimeAsync(context, bootstrap, deployment, ct);
+                return runtime = built;
             }, failures.Add, code => throw new InvalidOperationException("Unexpected exit " + code));
         using var stop = new CancellationTokenSource();
         var serving = replica.RunAsync(stop.Token);
@@ -80,21 +92,24 @@ public sealed class WakeupLifecycleTests
             }
             // A periodic scan works even when nothing received the release notification.
             var errors = new List<string>();
-            var scanner = new Wakeups(app, TimeSpan.FromMinutes(1), (_,_,_) => Task.FromResult(true),
+            var scanner = new Wakeups(app, TimeSpan.FromMinutes(1), "general", 2, (_,_,_) => Task.FromResult(true),
                 (name,cause,ct) => coordinator.ActivateAsync(name,cause,ct), errors.Add);
             if (cron)
             {
                 // Losing the builder after acquisition but before arming must preserve both
                 // the nominated occurrence and the retry backoff, even with no new request.
                 failStarts = 1;
-                await scanner.ScanAsync(default);
+                await scanner.DiscoverAsync(default);
+                await scanner.DrainAsync();
                 Assert.Single(errors);
                 Assert.Equal(true, await db.ScalarAsync("SELECT occurrence IS NOT NULL AND next_attempt_at > now() FROM tenant_wakeups"));
-                await scanner.ScanAsync(default);
+                await scanner.DiscoverAsync(default);
+                await scanner.DrainAsync();
                 Assert.Equal(1, starts);
                 errors.Clear();
                 await db.ExecuteOwnerAsync("UPDATE tenant_wakeups SET next_attempt_at=now()-interval '1 second'");
-                await scanner.ScanAsync(default);
+                await scanner.DiscoverAsync(default);
+                await scanner.DrainAsync();
                 Assert.Empty(errors);
             }
             // For the crashed owner only the production periodic loop drives recovery.
@@ -115,7 +130,8 @@ public sealed class WakeupLifecycleTests
             var delivered = (await runtime!.Host.Sessions.GetExistingAsync(owner.Id))!.Entry.Snapshot();
             Assert.Single(delivered.Queue.Select(Foxwarm.Sessions.SessionQueueJson.ToJson).Concat(delivered.History.Select(item => item.ToJson()))
                 .Where(item => item.ToJsonString().Contains("scheduled delivery", StringComparison.Ordinal)));
-            await scanner.ScanAsync(default);
+            await scanner.DiscoverAsync(default);
+                await scanner.DrainAsync();
             Assert.Equal(2, starts);
         }
         finally

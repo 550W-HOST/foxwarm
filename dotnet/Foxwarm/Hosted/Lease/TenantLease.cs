@@ -132,6 +132,9 @@ internal enum RenewalOutcome
     Lost,
 }
 
+/// <summary>A previously observed due or expired grant no longer needs autonomous activation.</summary>
+internal sealed class AutonomousDemandSettledException : Exception;
+
 /// <summary>Why a replica may not take a tenant at all (as opposed to "held by another").</summary>
 internal sealed class LeaseRefusedException(string message) : Exception(message);
 
@@ -206,7 +209,8 @@ internal sealed class TenantLease
         string replica,
         TimeSpan ttl,
         TimeSpan lockTimeout,
-        CancellationToken token
+        CancellationToken token,
+        TimeSpan? autonomousLead = null
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
@@ -245,6 +249,22 @@ internal sealed class TenantLease
         }
         if (await EligibleAsync(connection, transaction, replica, token).ConfigureAwait(false) is not { } profile)
             return null;
+        if (autonomousLead is { } lead)
+        {
+            // Release-with-wakeup and failed-start backoff serialize on this same lease row.
+            // Re-read after locking: another boot may have settled the scanned demand.
+            await using var demand = new NpgsqlCommand("""
+                SELECT (w.next_attempt_at IS NULL OR w.next_attempt_at <= now()) AND
+                    ((l.state = 'active' AND l.expires_at <= now()) OR
+                    (l.state = 'released' AND w.due_at <= now() + make_interval(secs => $2)))
+                FROM tenants t JOIN tenant_leases l USING(tenant_id) LEFT JOIN tenant_wakeups w USING(tenant_id)
+                WHERE t.name = $1
+                """, connection, transaction);
+            demand.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
+            demand.Parameters.Add(new NpgsqlParameter<double> { TypedValue = lead.TotalSeconds });
+            if (await demand.ExecuteScalarAsync(token).ConfigureAwait(false) is not true)
+                throw new AutonomousDemandSettledException();
+        }
         await using var update = new NpgsqlCommand(
             "UPDATE tenant_leases l SET owner_replica = $2, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3), draining_since = NULL"

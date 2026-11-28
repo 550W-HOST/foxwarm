@@ -126,7 +126,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                     if (slot.Releasing is not null)
                         slot.Demand = true;
                     slot.Autonomous |= cause != ActivationCause.Request;
-                    activation = slot.Activation ??= Task.Run(() => RunActivationAsync(slot));
+                    activation = slot.Activation ??= Task.Run(() => RunActivationAsync(slot, cause));
                 }
             }
             if (stale is not null)
@@ -135,7 +135,11 @@ internal sealed class TenantActivations : IAsyncDisposable
                 renewer.Lose(stale, Expired);
                 continue;
             }
-            return await activation.WaitAsync(token).ConfigureAwait(false);
+            try { return await activation.WaitAsync(token).ConfigureAwait(false); }
+            catch (AutonomousDemandSettledException) when (cause == ActivationCause.Request)
+            {
+                // A request joined a stale scan. Its own demand may still start the tenant.
+            }
         }
     }
 
@@ -204,7 +208,10 @@ internal sealed class TenantActivations : IAsyncDisposable
             {
                 slot.StaleEpoch = grant.Epoch;
                 if (slot.Building is { } building)
+                {
+                    building.Gate.Latch(AdmissionLatch.Stop);
                     _ = BoundStaleBuildAsync(building);
+                }
             }
             current = slot.Current;
             current?.Gate.Latch(AdmissionLatch.Stop);
@@ -346,7 +353,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         var outcome = IdleReleaseOutcome.Aborted;
         try
         {
-            var stopped = generation.RetireAsync();
+            var stopped = generation.RetireWithWakeupAsync(CancellationToken.None);
             if (await Task.WhenAny(stopped, Task.Delay(supervisor.DrainBound, CancellationToken.None)).ConfigureAwait(false) != stopped)
             {
                 renewer.Lose(generation.Handle, $"{reason}; its runtime didn't stop within the drain bound.");
@@ -357,7 +364,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                 return true;
             var pending = TakeStoppedGrant(slot, generation);
             if (pending is not null)
-                await ReleaseAsync(slot.Lease, pending, CancellationToken.None).ConfigureAwait(false);
+                await HandBackAsync(slot.Lease, pending, generation, CancellationToken.None).ConfigureAwait(false);
             outcome = IdleReleaseOutcome.Released;
             return true;
         }
@@ -407,17 +414,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         var outcome = IdleReleaseOutcome.Aborted;
         try
         {
-            WakeupDue? due = null;
-            var stepsDone = false;
-            using var steps = CancellationTokenSource.CreateLinkedTokenSource(token, generation.Fence.Lost);
-            var stopped = generation.RetireAsync(async () =>
-            {
-                var runtime = generation.Runtime!;
-                await runtime.StopProducersAsync(steps.Token).ConfigureAwait(false);
-                await runtime.SettleAsync(steps.Token).ConfigureAwait(false);
-                due = await runtime.NextDueAsync(steps.Token).ConfigureAwait(false);
-                stepsDone = true;
-            });
+            var stopped = generation.RetireWithWakeupAsync(token);
             if (await Task.WhenAny(stopped, Task.Delay(supervisor.DrainBound, CancellationToken.None)).ConfigureAwait(false) != stopped)
             {
                 renewer.Lose(
@@ -434,7 +431,7 @@ internal sealed class TenantActivations : IAsyncDisposable
             {
                 if (held is null || slot.Grant != held || !held.IsCurrent(clock()))
                     outcome = IdleReleaseOutcome.Fenced;
-                else if (slot.Demand || disposed || !stepsDone)
+                else if (slot.Demand || disposed)
                     outcome = IdleReleaseOutcome.Aborted;
                 else
                 {
@@ -443,8 +440,7 @@ internal sealed class TenantActivations : IAsyncDisposable
             }
             if (pending is not null)
             {
-                var released = await WriteReleaseAsync(pending,
-                    () => slot.Lease.ReleaseWithWakeupAsync(pending.Grant, due, token)).ConfigureAwait(false);
+                var released = await HandBackAsync(slot.Lease, pending, generation, CancellationToken.None).ConfigureAwait(false);
                 outcome = released ? IdleReleaseOutcome.Released : IdleReleaseOutcome.Fenced;
             }
             return outcome;
@@ -498,7 +494,10 @@ internal sealed class TenantActivations : IAsyncDisposable
             generation.Obligation = supervisor.Watch(id.ToString(), () => held.HardStop(supervisor.DrainTicks), generation.Stopped);
             slot.Building = generation;
             if (slot.StaleEpoch == held.Grant.Epoch)
+            {
+                generation.Gate.Latch(AdmissionLatch.Stop);
                 _ = BoundStaleBuildAsync(generation);
+            }
         }
         generation.Stopped.ContinueWith(
             task =>
@@ -522,7 +521,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         return generation;
     }
 
-    private async Task<TenantGeneration> RunActivationAsync(Slot slot)
+    private async Task<TenantGeneration> RunActivationAsync(Slot slot, ActivationCause cause)
     {
         // Set when publication cleared the slot's activation under the lock; until then the
         // slot's activation is this one, and no other can start.
@@ -571,10 +570,11 @@ internal sealed class TenantActivations : IAsyncDisposable
                 try
                 {
                     acquired = await slot.Lease
-                        .TryAcquireAsync(replica, timings.Ttl, timings.RenewInterval, CancellationToken.None)
+                        .TryAcquireAsync(replica, timings.Ttl, timings.RenewInterval, CancellationToken.None,
+                            cause == ActivationCause.Request ? null : Autonomous.Wakeups.Interval)
                         .ConfigureAwait(false);
                 }
-                catch (Exception error) when (error is not (TenantNotEligibleException or LeaseRefusedException))
+                catch (Exception error) when (error is not (TenantNotEligibleException or LeaseRefusedException or AutonomousDemandSettledException))
                 {
                     // The commit may have taken effect: this replica may hold the lease until it expires.
                     MarkUncertain(slot);
@@ -657,6 +657,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                 throw Fenced(generation, error, "during its runtime's start");
             }
             bool published;
+            AdmissionGate.Admission? acknowledging = null;
             lock (gate)
             {
                 published = !disposed && slot.Grant == held && slot.StaleEpoch != held.Grant.Epoch && held.IsCurrent(clock()) && !generation.IsFenced;
@@ -669,6 +670,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                     slot.Autonomous = false;
                     generation.Published = true;
                     generation.Gate.Open();
+                    if (wakeup is not null) acknowledging = generation.Gate.TryEnter();
                 }
             }
             if (!published)
@@ -689,6 +691,9 @@ internal sealed class TenantActivations : IAsyncDisposable
                 generation.Settle(await DisposeBuiltAsync(generation).ConfigureAwait(false));
                 throw Fenced(generation, null, "before its runtime was published");
             }
+            using (acknowledging)
+                if (acknowledging is not null)
+                    await generation.Runtime!.PublishedAsync(starting.Token).ConfigureAwait(false);
             return generation;
         }
         finally
@@ -778,7 +783,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                     current.Gate.Latch(AdmissionLatch.Stop);
                     slot.Retiring = current;
                     slot.Current = null;
-                    _ = current.RetireAsync();
+                    _ = current.RetireWithWakeupAsync(bound.Token);
                 }
                 foreach (var generation in new[] { slot.Retiring, slot.Building }.OfType<TenantGeneration>().Distinct())
                     generations.Add((slot, generation));
@@ -846,8 +851,18 @@ internal sealed class TenantActivations : IAsyncDisposable
             return;
         var pending = TakeStoppedGrant(slot, generation);
         if (pending is not null)
-            await ReleaseAsync(slot.Lease, pending, token).ConfigureAwait(false);
+        {
+            if (generation.Published)
+                await HandBackAsync(slot.Lease, pending, generation, token).ConfigureAwait(false);
+            else
+                await ReleaseAsync(slot.Lease, pending, token).ConfigureAwait(false); // Preserve any unarmed occurrence.
+        }
     }
+
+    private Task<bool> HandBackAsync(TenantLease lease, PendingRelease pending, TenantGeneration generation, CancellationToken token) =>
+        WriteReleaseAsync(pending, () => generation.ScheduleSettled
+            ? lease.ReleaseWithWakeupAsync(pending.Grant, generation.HandBack, token)
+            : lease.ReleaseAfterFailedStartAsync(pending.Grant, Backoff(1), true, token));
 
     private PendingRelease? TakeStoppedGrant(Slot slot, TenantGeneration generation)
     {
