@@ -148,9 +148,9 @@ A runtime owns what its build started, so a retired or failed runtime releases i
 - **Idle release** (`TryReleaseIdleAsync`), in order:
   1. Latch the gate if nothing is admitted, no admission happened within the idle time, and the runtime's own check holds.
   2. Stop producers.
-  3. Settle in-flight deliveries.
-  4. Compute the next due time from the persisted state.
-  5. Dispose the runtime; its final saves still hold the lease.
+  3. Settle in-flight deliveries. In a hosted Main, stop its services and streams and drain the accepted Session writers and final saves while holding the lease.
+  4. Compute the next due time from the settled state while tenant storage is available. See [scheduled unload and restart](./hosted-channels-timers.md#scheduled-unload-and-restart) for a failed deadline read or stale startup.
+  5. Finish disposing the runtime and drain remaining generation admissions.
   6. Write the wake-up row and release the lease in one transaction at the expected epoch (`ReleaseWithWakeupAsync`). A null due time clears the row.
 
   Work refused by the latched gate becomes demand (`AdmitAsync`). Demand that arrives before the transaction aborts the release: the grant stays, and the waiting activation builds the next generation over it at the same epoch. Steps 2–5 get the drain bound: a release that overruns it loses its grant unreleased (`IdleReleaseOutcome.Overrun`), the supervised fence cancels the steps and joins them, and the process ends if they don't confirm. A tenant is never latched and unavailable while its grant renews.
