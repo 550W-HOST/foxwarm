@@ -232,3 +232,12 @@ summary {
 #access input {
   margin-bottom: 0.15rem;
 }
+
+#providerStatus {
+  margin-bottom: 1rem;
+  overflow-wrap: anywhere;
+}
+#providerStatus ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.35rem;
+}

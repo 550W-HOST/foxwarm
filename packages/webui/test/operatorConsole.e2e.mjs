@@ -56,7 +56,17 @@ test('operator console signs in, edits limits and journal, follows placement and
       res.end(
         JSON.stringify({
           tenants: [
-            { slug: 'alpha', owner: 'primary', hot: 2, busy: 1, providerProblems: { pool: 'tenancy-mismatch' } },
+            {
+              slug: 'alpha',
+              owner: 'primary',
+              hot: 2,
+              busy: 1,
+              providerProblems: {
+                pool: 'tenancy-mismatch',
+                child: 'parent-not-granted',
+                future: 'new-diagnostic',
+              },
+            },
           ],
           replicas: [
             {
@@ -109,7 +119,11 @@ test('operator console signs in, edits limits and journal, follows placement and
     await page.click('#access button')
     await page.waitForSelector('#tenantRows button', { visible: true })
     await page.click('#tenantRows button')
-    assert.match(await page.$eval('#providerStatus', (e) => e.textContent), /pool: tenancy mismatch/)
+    assert.deepEqual(await page.$$eval('#providerStatus li', (items) => items.map((item) => item.textContent)), [
+      'pool: tenancy mismatch',
+      'child: parent Provider not granted',
+      'future: new-diagnostic',
+    ])
     assert.equal(await page.$eval('#retentionMode', (e) => e.value), 'unlimited')
     await page.select('#recording', 'true')
     await page.type('#limits label:first-child input', '4')

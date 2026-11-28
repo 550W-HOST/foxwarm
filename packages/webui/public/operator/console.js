@@ -24,6 +24,11 @@ let bearer = '',
   tenants = [],
   selected,
   pending = false
+const providerReasons = new Map([
+  ['tenancy-mismatch', 'tenancy mismatch'],
+  ['describe-failed', 'check failed'],
+  ['parent-not-granted', 'parent Provider not granted'],
+])
 let placementBySlug = new Map()
 const limitInputs = new Map()
 for (const [index, [key, name]] of limits.entries()) {
@@ -103,16 +108,19 @@ function showTenant(tenant) {
   $('name').textContent = tenant.slug
   $('identity').textContent = [tenant.primaryHostname, tenant.profile, tenant.state].filter(Boolean).join(' · ')
   const problems = placementBySlug.get(tenant.slug)?.providerProblems
-  const issues = Object.entries(problems ?? {}).map(
-    ([id, problem]) =>
-      `${id}: ${problem === 'tenancy-mismatch' ? 'tenancy mismatch' : problem === 'describe-failed' ? 'description unavailable' : problem}`,
-  )
-  $('providerStatus').textContent =
-    problems == null
-      ? 'Provider status: no current report.'
-      : issues.length
-        ? `Provider issues: ${issues.join('; ')}`
-        : 'Providers: no reported issues.'
+  const status = $('providerStatus')
+  status.replaceChildren()
+  if (problems == null) status.textContent = 'Providers: no current report.'
+  else if (!Object.keys(problems).length) status.textContent = 'Providers: no reported issues.'
+  else {
+    const list = document.createElement('ul')
+    for (const [id, code] of Object.entries(problems)) {
+      const item = document.createElement('li')
+      item.textContent = `${id}: ${providerReasons.get(code) ?? code}`
+      list.append(item)
+    }
+    status.append('Provider issues:', list)
+  }
   for (const [key, input] of limitInputs) input.value = tenant.limits?.[key] ?? ''
   $('recording').value = String(tenant.journal?.enabled ?? '')
   $('retention').value = tenant.journal?.retentionDays ?? ''
