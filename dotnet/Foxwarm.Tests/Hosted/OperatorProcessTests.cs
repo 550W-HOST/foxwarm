@@ -58,6 +58,9 @@ public sealed class OperatorProcessTests
         var origin = $"http://127.0.0.1:{port}";
         var config = Path.Combine(root.Path, "deployment.yaml");
         await File.WriteAllTextAsync(config, $"url: 'https://{{slug}}.test'\nbot: {{httpHost: 127.0.0.1}}\nhealth: {{port: 3002}}\nblobs: {{backend: postgres}}\noperator: {{port: {port}, url: '{origin}'}}\n");
+        var providers = ProviderTenancyTests.Deployment(root.Path, ("pool", "broken", true), ("legacy", "legacy", false)).Root["nodeProviders"]!.ToJsonString();
+        var providerConfig = "nodeProviders: " + providers + "\n";
+        await File.AppendAllTextAsync(config, providerConfig);
         Process Launch(string url, params string[] args)
         {
             var info = new ProcessStartInfo(Path.Combine(Environment.GetEnvironmentVariable("DOTNET_ROOT")!, "dotnet"))
@@ -159,7 +162,25 @@ public sealed class OperatorProcessTests
                 Assert.Equal((string?)promotion.Json["error"], (string?)JsonNode.Parse(await error)!["error"]);
             }
             Assert.Equal("master-host", await db.ScalarAsync("SELECT pinned_role FROM tenants WHERE name='control'"));
-            var replica = await harness.StartAsync("general", new Dictionary<string,string> { ["FOXWARM_KEK_FILE"] = key });
+            var quotaFile = Path.Combine(root.Path, "quotas.json");
+            await File.WriteAllTextAsync(quotaFile, "{\"execs\":0}");
+            const string pool = "/tenants/alpha/provider-grants?providerId=pool";
+            Assert.Equal(HttpStatusCode.BadRequest, (await Call(HttpMethod.Put, pool, new JsonObject { ["unknown"] = 1 })).Status);
+            Assert.Equal(HttpStatusCode.BadRequest, (await Call(HttpMethod.Put, "/tenants/alpha/provider-grants?providerId=legacy", new JsonObject())).Status);
+            Assert.Equal(HttpStatusCode.BadRequest, (await Call(HttpMethod.Put, "/tenants/alpha/provider-grants?providerId=Pool", new JsonObject())).Status);
+            var granted = JsonNode.Parse(await Cli("--url", origin, "--token-file", tokenFile, "grants", "set", "alpha", "pool", quotaFile))!;
+            Assert.True((bool)granted["changed"]!);
+            var grants = (await Call(HttpMethod.Get, "/tenants/alpha/provider-grants")).Json;
+            Assert.Equal(0,(int)grants["pool"]!["execs"]!);
+            Assert.Equal(10,(int)grants["pool"]!["nodes"]!);
+            Assert.Equal(60,(int)grants["pool"]!["lifecycleActionsPerHour"]!);
+            Assert.Empty((await Call(HttpMethod.Get, "/tenants/control/provider-grants")).Json.AsObject());
+            var revision = await db.ScalarAsync("SELECT settings_revision FROM tenants WHERE name='alpha'");
+            Assert.False((bool)(await Call(HttpMethod.Put, pool, grants["pool"]!.AsObject())).Json["changed"]!);
+            Assert.Equal(revision, await db.ScalarAsync("SELECT settings_revision FROM tenants WHERE name='alpha'"));
+            Assert.Equal(HttpStatusCode.OK,(await Call(HttpMethod.Put, "/tenants/control/provider-grants?providerId=legacy", new JsonObject())).Status);
+            Assert.False(File.Exists(Path.Combine(root.Path,"calls.jsonl")),"The operator started a Provider subprocess.");
+            var replica = await harness.StartAsync("general", new Dictionary<string,string> { ["FOXWARM_KEK_FILE"] = key }, extraConfig: providerConfig);
             var front = $"http://127.0.0.1:{replica.FrontPort}";
             Task<Reply> Redeem(string value) => Send(client, HttpMethod.Post, front + "/api/auth", "alpha.test", body: new JsonObject { ["token"] = value });
             Task<Reply> AsAdmin(string value, string path) => Send(client, HttpMethod.Get, front + path, "alpha.test", value);
@@ -173,9 +194,22 @@ public sealed class OperatorProcessTests
             var place = (await Call(HttpMethod.Get, "/placement")).Json;
             Assert.Equal("general", (string?)place["replicas"]![0]!["role"]);
             Assert.NotNull(place["replicas"]![0]!["version"]);
+            var alpha = place["tenants"]!.AsArray().Single(t => (string?)t!["slug"] == "alpha")!;
+            Assert.Equal("describe-failed",(string?)alpha["providerProblems"]!["pool"]);
             // No last-owner sample is attributed to a different epoch.
             await db.ExecuteOwnerAsync("UPDATE replicas SET capacity=jsonb_set(capacity, '{tenants,alpha,epoch}', '-1')");
             Assert.Null((await Call(HttpMethod.Get, "/placement")).Json["tenants"]!.AsArray().Single(t => (string?)t!["slug"] == "alpha")!["hot"]);
+            Assert.Null((await Call(HttpMethod.Get, "/placement")).Json["tenants"]!.AsArray().Single(t => (string?)t!["slug"] == "alpha")!["providerProblems"]);
+            var beforeRevoke = await harness.EpochAsync("alpha");
+            var removed = JsonNode.Parse(await Cli("--url", origin, "--token-file", tokenFile, "grants", "remove", "alpha", "pool"))!;
+            Assert.True((bool)removed["changed"]!);
+            Assert.False((bool)(await Call(HttpMethod.Delete, pool)).Json["changed"]!);
+            await Until(async () =>
+            {
+                await AsAdmin(reusable,"/health");
+                var observed = (await Call(HttpMethod.Get, "/placement")).Json["tenants"]!.AsArray().Single(t=>(string?)t!["slug"]=="alpha")!;
+                return (long)observed["epoch"]! > beforeRevoke && observed["providerProblems"] is JsonObject { Count: 0 };
+            });
             var epoch = await harness.EpochAsync("alpha");
             // The operator owns both limits. Change which one is tighter and verify the real
             // multipart route reads the effective minimum from each replacement generation.
