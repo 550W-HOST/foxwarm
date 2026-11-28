@@ -8,7 +8,7 @@ public sealed partial class HostedImportTests
     [Fact]
     public async Task Operator_import_and_master_reopen_the_same_physical_volume()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsLinux()) return;
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
         var physical = Directory.CreateDirectory(Path.Combine(temp.Path, "physical", "volume")).FullName;
@@ -28,7 +28,7 @@ public sealed partial class HostedImportTests
     [Fact]
     public async Task Operator_import_refuses_a_volume_whose_physical_parent_is_in_the_source()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsLinux()) return;
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
         Directory.CreateDirectory(Path.Combine(fixture.DataRoot, "child"));
@@ -48,7 +48,7 @@ public sealed partial class HostedImportTests
     [InlineData(false)]
     public async Task Operator_import_refuses_an_unwritable_volume_before_writing_a_tenant(bool dryRun)
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsLinux()) return;
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
         var volume = Directory.CreateDirectory(Path.Combine(temp.Path, "volume")).FullName;

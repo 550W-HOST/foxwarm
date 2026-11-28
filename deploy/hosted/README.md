@@ -178,11 +178,76 @@ Set `FOXWARM_MASTER_IMAGE` for a different image reference. The mount root `/mas
 
 In Helm, set `masterHost.enabled=true`, `masterHost.image` to the full image reference and `mesh.secretName` to an existing Secret containing the `mesh-secret` file. Set `masterHost.storage` and optionally `masterHost.storageClassName`. Install `docker/seccomp-chromium.json` on eligible Kubernetes nodes under the kubelet's seccomp directory at `masterHost.chromiumSeccompProfile`. The chart creates one `foxwarm-master` StatefulSet pod with a ReadWriteOnce claim. Upgrades replace ordinal zero without surge. A stopped pod or a volume reattachment is operator downtime; general tenants keep their existing owners. Back up the claim: live terminal processes don't survive restart, but Agent files, Code workspace and exec logs do.
 
+**Forced replacement:** the StatefulSet can guarantee one writer only while Kubernetes waits for the old master to stop. If its node is unreachable, fence the node (for example, confirm it is powered off) or revoke its access to the volume before allowing a replacement. Never force-delete the master pod or its node without that fencing. A new PostgreSQL lease cannot revoke file handles that the old master already has open.
+
 ### Operator Agent folders
 
 The master host opens Agent folders under `FOXWARM_AGENTS_DIR/<tenant_id>/`. The numeric directory belongs to that database tenant for its entire lifetime. Back up the master volume alongside its structured state. After replacing or deleting the operator tenant, preserve or remove its old directory explicitly. A replacement gets its own directory.
 
 To migrate a stopped operator installation, mount its offline copy read-only and the master volume read-write in the import job. Set `FOXWARM_AGENTS_DIR` to the same existing directory the master host uses. Both the dry run and the real operator import check that this directory is writable and supports directory sync. Run `foxwarm hosted import --profile operator --tenant <slug> --data-root <copy>`; add `--agents-dir <source>` for a separately staged Agents volume. Use `--dry-run` first to inspect the plan without changing the target. The copy preserves executable modes and symlinks; inspect the report for dangling targets.
+
+**Compose.** Run the importer as a one-off `foxwarm-master` container in the **same Compose project** as the serving master. This reuses the project's `master` volume at `/master`. From `deploy/hosted`, with PostgreSQL and the blob service running, the example below assumes `SOURCE` is the absolute path to the stopped installation's copy and `REPORTS` is an existing directory writable by uid 1000. Use the same `-p` or `COMPOSE_PROJECT_NAME` as the deployment if it overrides the default. Only the import job gets the migration credential.
+
+```sh
+docker compose --profile master stop foxwarm-master
+import_ops() {
+  docker compose --profile master run --rm --no-deps \
+    -v "$SOURCE:/source:ro" -v "$REPORTS:/reports" \
+    -v "$PWD/secrets/migrate-database-url:/run/secrets/migrate-database-url:ro" \
+    -e FOXWARM_MIGRATE_DATABASE_URL_FILE=/run/secrets/migrate-database-url \
+    foxwarm-master hosted import --profile operator --tenant ops --data-root /source "$@"
+}
+import_ops --dry-run --report /reports/ops-plan.json
+# Inspect the plan before running the import. Use fresh report filenames for each run.
+import_ops --report /reports/ops-import.json
+```
+
+**Helm.** In the release namespace, record the serving pod's image and the `master` volume's claim name **before** scaling down. For the default release `foxwarm` they are available with:
+
+```sh
+kubectl get pod foxwarm-master-0 -o jsonpath='{.spec.containers[0].image}{"\n"}{.spec.volumes[?(@.name=="master")].persistentVolumeClaim.claimName}{"\n"}'
+kubectl scale statefulset foxwarm-master --replicas=0
+kubectl wait --for=delete pod/foxwarm-master-0 --timeout=5m
+```
+
+Run a Job in that namespace with the **existing** claim (normally `master-foxwarm-master-0`); creating a new PVC would import into a different disk. The example uses a read-only copy on `operator-import-source` and writes the report and deployment draft under `/master/import-reports`. Substitute the exact master image, claim, deployment ConfigMap and runtime Secret from the release. Supply an existing Secret with `migrate-database-url` for this Job; the chart's temporary migration-hook Secret may already have been deleted. Use `--dry-run` and a separate report name for a planning Job first.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata: {name: foxwarm-import-ops}
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      containers:
+        - name: import
+          image: registry.example.com/foxwarm-master:replace-with-release-tag
+          args: [hosted, import, --profile, operator, --tenant, ops, --data-root, /source, --report, /master/import-reports/ops-import.json]
+          env:
+            - {name: FOXWARM_AGENTS_DIR, value: /master}
+            - {name: FOXWARM_DATABASE_URL_FILE, value: /run/secrets/foxwarm/database-url}
+            - {name: FOXWARM_KEK_FILE, value: /run/secrets/foxwarm/kek.json}
+            - {name: FOXWARM_MIGRATE_DATABASE_URL_FILE, value: /run/secrets/import/migrate-database-url}
+          volumeMounts:
+            - {name: master, mountPath: /master}
+            - {name: source, mountPath: /source, readOnly: true}
+            - {name: config, mountPath: /etc/foxwarm, readOnly: true}
+            - {name: runtime, mountPath: /run/secrets/foxwarm, readOnly: true}
+            - {name: migration, mountPath: /run/secrets/import, readOnly: true}
+      volumes:
+        - {name: master, persistentVolumeClaim: {claimName: master-foxwarm-master-0}}
+        - {name: source, persistentVolumeClaim: {claimName: operator-import-source, readOnly: true}}
+        - name: config
+          configMap: {name: foxwarm-deployment, items: [{key: master.yaml, path: deployment.yaml}]}
+        - {name: runtime, secret: {secretName: foxwarm-runtime, defaultMode: 0440}}
+        - {name: migration, secret: {secretName: foxwarm-import-owner, defaultMode: 0440}}
+```
+
+Wait for Job completion and read its import summary and report. Delete the completed Job before scaling the StatefulSet back to one. On Compose, start `foxwarm-master` again. Keep tenant traffic on the old routing configuration until the hostname step below is complete.
 
 After a successful import, register the tenant's public hostname **before moving traffic** to the multi-tenant front. For example, to cut over the imported tenant `ops` to `ops.example.com`:
 
