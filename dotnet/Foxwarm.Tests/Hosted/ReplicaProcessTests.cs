@@ -59,6 +59,22 @@ public sealed class ReplicaProcessTests(ITestOutputHelper output)
         (int)(await replica.StatusAsync())["tenants"]!;
 
     [Fact]
+    public async Task AFreshPortReplacesAnEdgeWhosePublicBindFailed()
+    {
+        await using var cluster = await ReplicaProcessHarness.CreateAsync();
+        await cluster.AddTenantAsync("collision");
+        using var occupied = new System.Net.Sockets.TcpListener(IPAddress.Loopback,0);
+        occupied.Start();
+        var busy = ((IPEndPoint)occupied.LocalEndpoint).Port;
+        var samples = 0;
+        var edge = await cluster.StartAsync("edge", samplePort: () => ++samples == 1 ? busy : ChildListenerPorts.Sample());
+        Assert.NotEqual(busy, edge.FrontPort);
+        Assert.Equal(1L,await cluster.Database.ScalarAsync("SELECT count(*) FROM replicas WHERE split_part(replica_id,'/',1)='edge'"));
+        using var response = await edge.GetAsync("collision");
+        Assert.Equal(HttpStatusCode.Unauthorized,response.StatusCode);
+    }
+
+    [Fact]
     public async Task RebalanceMovesOnlyIdleResidentsAfterThePreferredNameHasStayedStable()
     {
         var slugs = Enumerable.Range(0,100).Select(i => "rebalance"+i)

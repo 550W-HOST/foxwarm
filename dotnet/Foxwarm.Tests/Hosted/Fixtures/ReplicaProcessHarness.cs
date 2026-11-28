@@ -115,12 +115,48 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
     }
 
     /// <summary>Starts a replica process named <paramref name="name"/> and waits until it is ready.</summary>
-    internal async Task<Replica> StartAsync(string name, IDictionary<string, string>? environment = null, bool webUi = true, string extraConfig = "")
+    internal async Task<Replica> StartAsync(string name, IDictionary<string, string>? environment = null, bool webUi = true,
+        string extraConfig = "", Func<int>? samplePort = null)
+    {
+        samplePort ??= ChildListenerPorts.Sample;
+        for (int attempt = 1; ; attempt++)
+        {
+            HashSet<int> ports = [];
+            int NextPort()
+            {
+                int port;
+                do port = samplePort(); while (!ports.Add(port));
+                return port;
+            }
+            var front = NextPort();
+            var health = NextPort();
+            var mesh = NextPort();
+            var replica = await LaunchAsync(name, front, health, mesh, environment, webUi, extraConfig);
+            try
+            {
+                await replica.ReadyAsync(TimeSpan.FromSeconds(60));
+                lock (replicas) replicas.Add(replica);
+                return replica;
+            }
+            catch (IOException error) when (attempt < ChildListenerPorts.MaxAttempts && replica.Exited && ChildListenerPorts.IsCollision(error.Message))
+            {
+                await replica.DisposeAsync();
+                // A public bind failure can follow registration. This unpublished test boot will
+                // never heartbeat again; remove its exact registration before retrying that name.
+                if (error.Message.Contains($"127.0.0.1:{front}", StringComparison.Ordinal))
+                    await Database.ScalarAsync("DELETE FROM replicas WHERE mesh_address=$1 AND split_part(replica_id,'/',1)=$2", $"http://127.0.0.1:{mesh}", replica.Name);
+            }
+            catch
+            {
+                await replica.DisposeAsync();
+                throw;
+            }
+        }
+    }
+
+    private async Task<Replica> LaunchAsync(string name, int front, int health, int mesh, IDictionary<string,string>? environment, bool webUi, string extraConfig)
     {
         var root = Path.Combine(temp.Path, name);
-        var front = FreePort();
-        var health = FreePort();
-        var mesh = FreePort();
         Directory.CreateDirectory(root);
         var deployment = Path.Combine(root, "deployment.yaml");
         await File.WriteAllTextAsync(
@@ -164,20 +200,7 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
         if (info.Environment.TryGetValue("FOXWARM_ROLE", out var role) && role == "master-host")
             Directory.CreateDirectory(info.Environment["FOXWARM_AGENTS_DIR"]!);
         var process = Process.Start(info)!;
-        var replica = new Replica(name, process, proxy, front, health);
-        lock (replicas)
-            replicas.Add(replica);
-        await replica.ReadyAsync(TimeSpan.FromSeconds(60));
-        return replica;
-    }
-
-    private static int FreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
+        return new Replica(info.Environment["FOXWARM_REPLICA_ID"]!, process, proxy, front, health);
     }
 
     public async ValueTask DisposeAsync()
@@ -245,14 +268,20 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
             var watch = Stopwatch.StartNew();
             while (true)
             {
-                Assert.False(process.HasExited, $"replica {Name} exited with {(process.HasExited ? process.ExitCode : 0)}:\n{Output}");
+                if (process.HasExited)
+                {
+                    await reading;
+                    throw new IOException($"Replica {Name} exited with {process.ExitCode}:\n{Output}");
+                }
                 try
                 {
-                    using var response = await client.GetAsync($"http://127.0.0.1:{HealthPort}/readyz");
-                    if (response.IsSuccessStatusCode)
+                    var status = await StatusAsync();
+                    if ((bool?)status["ready"] == true && (string?)status["replica"] is { } boot
+                        && Foxwarm.Hosted.Lease.ReplicaRegistry.LogicalName(boot) == Name)
                         return;
                 }
                 catch (HttpRequestException) { }
+                catch (System.Text.Json.JsonException) { } // Another listener may occupy the sampled health port.
                 Assert.True(watch.Elapsed < limit, $"replica {Name} didn't become ready:\n{Output}");
                 await Task.Delay(100);
             }

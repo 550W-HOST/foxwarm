@@ -68,7 +68,16 @@ internal sealed class S3Server
         Directory.CreateDirectory(data, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var accessKey = "fw" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8));
         var secretKey = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(20));
-        var port = FreePort();
+        for (int attempt = 1; ; attempt++)
+        {
+            var port = ChildListenerPorts.Sample();
+            try { return await StartGatewayAsync(executable, root, data, accessKey, secretKey, enableVersioning, port); }
+            catch (IOException error) when (attempt < ChildListenerPorts.MaxAttempts && ChildListenerPorts.IsCollision(error.Message)) { }
+        }
+    }
+
+    private static async Task<S3Server> StartGatewayAsync(string executable,string root,string data,string accessKey,string secretKey,bool enableVersioning,int port)
+    {
         var start = new ProcessStartInfo(executable)
         {
             UseShellExecute = false,
@@ -89,10 +98,27 @@ internal sealed class S3Server
         start.Environment["ROOT_ACCESS_KEY_ID"] = accessKey;
         start.Environment["ROOT_SECRET_ACCESS_KEY"] = secretKey;
         var process = Process.Start(start)!;
-        process.OutputDataReceived += (_, _) => { };
-        process.ErrorDataReceived += (_, _) => { };
+        var errors = new System.Collections.Generic.Queue<string>();
+        process.OutputDataReceived += (_,_) => { };
+        process.ErrorDataReceived += (_,line) =>
+        {
+            if (line.Data is null) return;
+            lock (errors)
+            {
+                if (errors.Count >= 16) errors.Dequeue();
+                errors.Enqueue(line.Data);
+            }
+        };
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
+        var endpoint = new Uri($"http://127.0.0.1:{port}");
+        try { await WaitUntilServingAsync(endpoint, process, errors); }
+        catch
+        {
+            if (!process.HasExited) process.Kill();
+            process.Dispose();
+            throw;
+        }
         // Removes the server and its data when this process ends, also when it is killed.
         var watcher = new ProcessStartInfo("setsid") { UseShellExecute = false, RedirectStandardInput = true };
         foreach (var argument in new[] { "sh", "-c", $"exec </dev/null >/dev/null 2>&1; while kill -0 {Environment.ProcessId} 2>/dev/null; do sleep 2; done; kill {process.Id}; sleep 1; rm -rf '{root}'" })
@@ -108,38 +134,32 @@ internal sealed class S3Server
             }
             catch { }
         };
-        var endpoint = new Uri($"http://127.0.0.1:{port}");
-        await WaitUntilServingAsync(endpoint, process);
         return new S3Server(endpoint, accessKey, secretKey);
     }
 
     // The gateway answers HTTP once it serves.
-    private static async Task WaitUntilServingAsync(Uri endpoint, Process process)
+    private static async Task WaitUntilServingAsync(Uri endpoint, Process process, Queue<string> errors)
     {
         using var http = new HttpClient(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(2) };
         var deadline = Stopwatch.StartNew();
         while (deadline.Elapsed < TimeSpan.FromSeconds(30))
         {
             if (process.HasExited)
-                throw new InvalidOperationException($"VersityGW exited with code {process.ExitCode} at startup.");
+            {
+                process.WaitForExit(); // Drain redirected stderr before classifying the exit.
+                lock (errors) throw new IOException($"VersityGW exited with code {process.ExitCode} at startup: {string.Join("\n",errors)}");
+            }
             try
             {
                 using var response = await http.GetAsync(endpoint);
-                // Any HTTP answer means the gateway is serving.
-                _ = response.StatusCode;
-                return;
+                // The unsigned bucket listing is refused with an S3 request ID. An unrelated
+                // HTTP service on the candidate port is not this fixture becoming ready.
+                if (response.Headers.Contains("x-amz-request-id")) return;
             }
             catch (HttpRequestException) { }
             catch (TaskCanceledException) { }
             await Task.Delay(100);
         }
         throw new TimeoutException("VersityGW didn't start serving within 30 s.");
-    }
-
-    private static int FreePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 }

@@ -13,13 +13,6 @@ namespace Foxwarm.Tests.Hosted;
 [Trait("Backend", "postgres")]
 public sealed class OperatorProcessTests
 {
-    private static int FreePort()
-    {
-        using var socket = new TcpListener(IPAddress.Loopback, 0);
-        socket.Start();
-        return ((IPEndPoint)socket.LocalEndpoint).Port;
-    }
-
     private sealed record Reply(HttpStatusCode Status, string Text)
     {
         internal JsonNode Json => JsonNode.Parse(Text)!;
@@ -54,13 +47,13 @@ public sealed class OperatorProcessTests
         using var root = new TempDirectory();
         var key = Path.Combine(root.Path, "kek.json");
         InstanceKeys.OpenOrCreate(key);
-        var port = FreePort();
+        var port = ChildListenerPorts.Sample();
         var origin = $"http://127.0.0.1:{port}";
         var config = Path.Combine(root.Path, "deployment.yaml");
-        await File.WriteAllTextAsync(config, $"url: 'https://{{slug}}.test'\nbot: {{httpHost: 127.0.0.1}}\nhealth: {{port: 3002}}\nblobs: {{backend: postgres}}\noperator: {{port: {port}, url: '{origin}'}}\n");
         var providers = ProviderTenancyTests.Deployment(root.Path, ("pool", "broken", true), ("legacy", "legacy", false)).Root["nodeProviders"]!.ToJsonString();
         var providerConfig = "nodeProviders: " + providers + "\n";
-        await File.AppendAllTextAsync(config, providerConfig);
+        Task WriteConfigAsync() => File.WriteAllTextAsync(config, $"url: 'https://{{slug}}.test'\nbot: {{httpHost: 127.0.0.1}}\nhealth: {{port: 3002}}\nblobs: {{backend: postgres}}\noperator: {{port: {port}, url: '{origin}'}}\n" + providerConfig);
+        await WriteConfigAsync();
         Process Launch(string url, params string[] args)
         {
             var info = new ProcessStartInfo(Path.Combine(Environment.GetEnvironmentVariable("DOTNET_ROOT")!, "dotnet"))
@@ -95,20 +88,45 @@ public sealed class OperatorProcessTests
             await wrongRole.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
             Assert.Equal(78, wrongRole.ExitCode);
         }
-        using var service = Launch(db.OperatorConnectionString, "serve");
-        var serviceError = service.StandardError.ReadToEndAsync();
-        _ = service.StandardOutput.ReadToEndAsync();
         using var client = new HttpClient(new HttpClientHandler { UseProxy = false, UseCookies = false });
         var api = origin + OperatorServer.Path;
         Task<Reply> Call(HttpMethod method, string path, JsonNode? body = null) => Send(client, method, api + path, bearer: op, body: body);
+        async Task<Process> StartServiceAsync()
+        {
+            for (int attempt=1; ; attempt++)
+            {
+                var child = Launch(db.OperatorConnectionString,"serve");
+                var error = child.StandardError.ReadToEndAsync();
+                _ = child.StandardOutput.ReadToEndAsync();
+                try
+                {
+                    await Until(async () =>
+                    {
+                        if (child.HasExited) throw new IOException(await error);
+                        try { return (await Call(HttpMethod.Get,"/tenants")).Status == HttpStatusCode.OK; }
+                        catch (HttpRequestException) { return false; }
+                    });
+                    return child;
+                }
+                catch (IOException e) when (child.HasExited && attempt < ChildListenerPorts.MaxAttempts && ChildListenerPorts.IsCollision(e.Message))
+                {
+                    child.Dispose();
+                    port = ChildListenerPorts.Sample();
+                    origin = $"http://127.0.0.1:{port}";
+                    api = origin + OperatorServer.Path;
+                    await WriteConfigAsync();
+                }
+                catch
+                {
+                    if (!child.HasExited) child.Kill(entireProcessTree:true);
+                    child.Dispose();
+                    throw;
+                }
+            }
+        }
+        using var service = await StartServiceAsync();
         try
         {
-            await Until(async () =>
-            {
-                Assert.False(service.HasExited, service.HasExited ? await serviceError : "");
-                try { return (await Call(HttpMethod.Get, "/tenants")).Status == HttpStatusCode.OK; }
-                catch (HttpRequestException) { return false; }
-            });
             Assert.Equal(HttpStatusCode.Unauthorized, (await Send(client, HttpMethod.Get, api + "/tenants", cookie: "foxwarm_token=" + op)).Status);
             Assert.Equal(HttpStatusCode.Unauthorized, (await Send(client, HttpMethod.Get, api + "/tenants", bearer: "fwop_" + new string('0', 64))).Status);
             Assert.Equal(HttpStatusCode.NotFound, (await Send(client, HttpMethod.Get, api + "/tenants", "alpha.test", op)).Status);
