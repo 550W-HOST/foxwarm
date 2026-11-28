@@ -9,6 +9,7 @@ namespace Foxwarm.Nodes;
 internal sealed class ProviderExecBackend(ExecutableNodeProvider provider, string nodeId)
 {
     internal string ProviderId => provider.Id;
+    internal int? ConcurrentLimit => provider.Quotas?.Execs;
     internal string NodeId => nodeId;
     private string LocalId => nodeId[(provider.Id.Length + 1)..];
 
