@@ -16,7 +16,8 @@ internal sealed record ReplicaRow(
     bool Draining,
     JsonObject Capacity,
     DateTimeOffset StartedAt,
-    string? MeshAddress = null
+    string? MeshAddress = null,
+    int ReaderVersion = 1
 );
 
 /// <summary>
@@ -67,7 +68,7 @@ internal static class Placement
             .GroupBy(row => row.Name, StringComparer.Ordinal)
             .Select(boots => boots.OrderBy(row => row.StartedAt).ThenBy(row => row.Replica, StringComparer.Ordinal).First())
             .Where(row => !row.Draining && ReplicaRoles.MayServe(row.Role, profile, pinnedRole))
-            .Where(row => accepts?.Invoke(row) ?? true)
+            .Where(row => row.Capacity["acceptingNew"]?.GetValue<bool>() != false && (accepts?.Invoke(row) ?? true))
             .ToDictionary(row => row.Name, StringComparer.Ordinal);
         return [.. Rank(slug, byName.Keys).Select(name => byName[name])];
     }

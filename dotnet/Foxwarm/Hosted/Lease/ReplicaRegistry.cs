@@ -60,15 +60,14 @@ internal sealed class ReplicaRegistry
     /// Replicas whose heartbeat is younger than <paramref name="liveFor"/>, for placement: per
     /// boot, with its logical name, role, drain flag, capacity and start time.
     /// </summary>
-    internal async Task<IReadOnlyList<ReplicaRow>> LiveAsync(TimeSpan liveFor, CancellationToken token)
+    internal Task<IReadOnlyList<ReplicaRow>> LiveAsync(TimeSpan liveFor, CancellationToken token) =>
+        database.ClusterAsync((tx, ct) => LiveAsync(tx, liveFor, ct), token);
+
+    internal static async Task<IReadOnlyList<ReplicaRow>> LiveAsync(PgTx tx, TimeSpan liveFor, CancellationToken token)
     {
-        await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
-        await using var command = new NpgsqlCommand(
-            "SELECT replica_id, coalesce(name, replica_id), role, draining, (capacity - 'tenants' - 'version')::text, started_at, mesh_address FROM replicas"
-                + " WHERE heartbeat_at > now() - make_interval(secs => $1)",
-            connection
-        );
-        command.Parameters.Add(new NpgsqlParameter<double> { TypedValue = liveFor.TotalSeconds });
+        await using var command = tx.Command(
+            "SELECT replica_id, coalesce(name, replica_id), role, draining, (capacity - 'tenants' - 'version')::text, started_at, mesh_address, reader_version FROM replicas"
+                + " WHERE heartbeat_at > clock_timestamp() - make_interval(secs => $1)", liveFor.TotalSeconds);
         var rows = new List<ReplicaRow>();
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         while (await reader.ReadAsync(token).ConfigureAwait(false))
@@ -79,7 +78,8 @@ internal sealed class ReplicaRegistry
                 reader.GetBoolean(3),
                 System.Text.Json.Nodes.JsonNode.Parse(reader.GetString(4)) as System.Text.Json.Nodes.JsonObject ?? [],
                 reader.GetFieldValue<DateTimeOffset>(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6)
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.GetInt32(7)
             ));
         return rows;
     }
