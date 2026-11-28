@@ -135,8 +135,8 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
             throw Unavailable("Node service channel could not be started: " + error.Code);
         }
         var generation = new Generation(child, new());
-        // Diagnostics are drained and discarded: a long-lived process must not stall on stderr,
-        // and raw provider diagnostics are never returned to callers.
+        // Always drain stderr. A hosted sink tags diagnostics for the operator; they never
+        // become protocol errors returned to the caller.
         _ = Task.Run(() => DrainAsync(child.StandardError.BaseStream));
         var envelope = new JsonObject
         {
@@ -146,6 +146,7 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
             ["operation"] = "connect",
             ["request"] = new JsonObject { ["nodeId"] = localId },
         };
+        provider.Identify(envelope);
         try
         {
             generation.Reader = new NdjsonLineReader(child.StandardOutput.BaseStream, FrameLimit);
@@ -226,12 +227,16 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
         }
     }
 
-    private static async Task DrainAsync(Stream stream)
+    private async Task DrainAsync(Stream stream)
     {
         var buffer = new byte[8192];
         try
         {
-            while (await stream.ReadAsync(buffer) > 0) { }
+            int read;
+            while ((read = await stream.ReadAsync(buffer)) > 0)
+                if (provider.Stderr is { } log)
+                    foreach (var line in Encoding.UTF8.GetString(buffer, 0, read).Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                        log(line.TrimEnd('\r'));
         }
         catch (Exception error) when (error is IOException or ObjectDisposedException) { }
     }

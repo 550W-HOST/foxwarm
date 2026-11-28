@@ -10,6 +10,8 @@ namespace Foxwarm.Nodes;
 // Callers see one target/request/command/event surface and never choose a transport.
 internal sealed partial class NodeProviderRegistry : IAsyncDisposable
 {
+    // A registry belongs to one tenant generation. Never pool these connections across
+    // registries: the connect handshake binds the entire stream to its driver's tenant.
     private readonly ConcurrentDictionary<string, ProviderServiceChannel> channels = new(
         StringComparer.Ordinal
     );
