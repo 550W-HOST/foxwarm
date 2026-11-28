@@ -32,3 +32,5 @@ The administrator-only file-backed Logs topic shares the same physical socket an
 ## Tests
 
 `WebUiRealtimeRevisionTests.cs` (registered cold-target channel delivery over HTTP/WebSocket, retained/removed/deleted command replies, replaced-owner admission, snapshot ordering, attributed unavailable-error frames, and unavailable-error/close ordering on controlled and real sockets); `WebUiQueuePreviewTests.cs` (bounded system parts and unchanged queue); `WebUiAccessTests.cs`; stream/list/task/terminal event tests.
+
+Session SSE streams share the hosted WebSocket lifetime allowance. Each SSE reader and each physical WebUI socket has a 64 MiB backlog (encoded data plus per-event overhead), large enough for image or multi-Session updates. A full queue closes only that subscription; a new subscription takes its baseline from the current owner. SSE queues never retain a history root. WebSockets charge initialization events as well as the live sender queue.

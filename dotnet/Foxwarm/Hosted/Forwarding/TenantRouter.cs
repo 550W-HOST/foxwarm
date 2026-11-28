@@ -9,9 +9,9 @@ namespace Foxwarm.Hosted.Forwarding;
 /// <summary>The public edge resolves and retries. A mesh receiver either dispatches locally or declines.</summary>
 internal sealed class TenantRouter(string boot, MeshAuthentication authentication, RouteDirectory directory,
     ReplicaRegistry registry, TenantActivations activations, HostnameDirectory hosts, LeaseTimings timings,
-    Func<TenantGeneration, HttpContext, Task> dispatch, Func<bool> hasCapacity, Action<string> log, CancellationToken processStop) : IDisposable
+    Func<TenantGeneration, HttpContext, Task> dispatch, Func<bool> hasCapacity, Action<string> log, CancellationToken processStop, int tenantHoldLimit = 128) : IDisposable
 {
-    private readonly SemaphoreSlim queue = new(2048);
+    private readonly EdgeHoldBudget holds = new(tenantHoldLimit);
     private readonly SemaphoreSlim buffers = new(2048);
     private readonly MeshTransport transport = new(authentication);
     private readonly object gate = new();
@@ -105,15 +105,9 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
         MeshAuthentication.StripControlHeaders(request.Headers);
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, stopping.Token);
         budget.CancelAfter(timings.Ttl);
-        int held = 0;
-        bool Enter()
-        {
-            if (!queue.Wait(0)) return false;
-            held = 1;
-            return true;
-        }
-        void EndHold() { if (Interlocked.Exchange(ref held, 0) != 0) queue.Release(); }
-        if (!Enter()) { context.Response.StatusCode = 503; return; }
+        IDisposable? held = holds.TryEnter(null);
+        void EndHold() => Interlocked.Exchange(ref held, null)?.Dispose();
+        if (held is null) { context.Response.StatusCode = 503; return; }
         var originalBody = request.Body;
         ForwardedBody? body = null;
         var reservedBuffer = false;
@@ -122,6 +116,9 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
         {
             var slug = await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false);
             if (slug is null) { context.Response.StatusCode = 404; return; }
+            EndHold();
+            held = holds.TryEnter(slug);
+            if (held is null) { context.Response.StatusCode = 503; return; }
             var hasBody = context.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody
                 ?? (request.ContentLength > 0 || request.Headers.ContainsKey("Transfer-Encoding"));
             while (!budget.IsCancellationRequested)
@@ -176,7 +173,7 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
                         var outcome = await transport.DispatchAsync(context, forwarder, route, slug, budget.Token, EndHold).ConfigureAwait(false);
                         if (outcome == DispatchOutcome.Completed) return;
                         if (body is not null && !body.RewindIfAvailable()) break;
-                        if (held == 0 && !Enter()) break;
+                        if (held is null && (held = holds.TryEnter(slug)) is null) break;
                     }
                 }
                 await Task.Delay(TimeSpan.FromMilliseconds(100), budget.Token).ConfigureAwait(false);

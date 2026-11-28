@@ -11,7 +11,7 @@ namespace Foxwarm.Sessions;
 internal sealed partial class SessionOwner
 {
     private readonly ConcurrentDictionary<long, Task> running = new();
-    private readonly ConcurrentDictionary<long, Channel<SessionRuntimeEvent>> listeners = new();
+    private readonly ConcurrentDictionary<long, SseSubscription> listeners = new();
     internal event Action<SessionRuntimeEvent>? Changed;
     internal Action<SessionRuntimeEvent, JsonObject?>? ChangedProjection { get; set; }
     private long nextListener;
@@ -68,12 +68,8 @@ internal sealed partial class SessionOwner
     internal void NotifyDeleted()
     {
         var value = new SessionRuntimeEvent(Id, SessionEventKind.Deleted, null);
-        foreach (var channel in listeners.Values)
-        {
-            channel.Writer.TryWrite(value);
-            channel.Writer.TryComplete();
-        }
-        listeners.Clear();
+        PublishToSubscribers(value);
+        CloseSubscribers();
     }
 
     public SessionEntry Entry => entry ??= Registry.GetRequired(Id);
@@ -233,25 +229,18 @@ internal sealed partial class SessionOwner
         await Compactor.DrainAsync();
     }
 
-    public (long Id, ChannelReader<SessionRuntimeEvent> Reader) Subscribe()
+    public (long Id, ChannelReader<SessionRuntimeEvent> Reader) Subscribe(int backlogBytes = 64 * 1024 * 1024, Action? dropped = null)
     {
-        var channel = Channel.CreateUnbounded<SessionRuntimeEvent>(
-            new UnboundedChannelOptions
-            {
-                SingleReader = true,
-                SingleWriter = false,
-                AllowSynchronousContinuations = false,
-            }
-        );
+        var listener = new SseSubscription(backlogBytes, dropped);
         var id = Interlocked.Increment(ref nextListener);
-        listeners[id] = channel;
-        return (id, channel.Reader);
+        listeners[id] = listener;
+        return (id, listener);
     }
 
     public void Unsubscribe(long id)
     {
         if (listeners.TryRemove(id, out var channel))
-            channel.Writer.TryComplete();
+            channel.Close();
     }
 
     public void CloseSubscribers()
@@ -274,8 +263,19 @@ internal sealed partial class SessionOwner
     {
         ChangedProjection?.Invoke(value, catalogRow);
         Changed?.Invoke(value);
-        foreach (var channel in listeners.Values)
-            channel.Writer.TryWrite(value);
+        PublishToSubscribers(value);
+    }
+
+    private void PublishToSubscribers(SessionRuntimeEvent value)
+    {
+        if (listeners.IsEmpty || value.Kind == SessionEventKind.RequestProgress) return;
+        // The SSE queue-append path sends individual messages. It never uses the
+        // history snapshot that the revisioned WebSocket projection needs inline.
+        var item = value with { Snapshot = null };
+        var bytes = 96 + System.Text.Encoding.UTF8.GetByteCount(item.SessionId)
+            + (item.Data is null ? 0 : System.Text.Encoding.UTF8.GetByteCount(item.Data.ToJsonText()));
+        foreach (var (id, listener) in listeners)
+            if (!listener.Offer(item, bytes)) Unsubscribe(id);
     }
 
     internal void PublishStateChanged(JsonObject row)

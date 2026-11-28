@@ -82,6 +82,39 @@ public sealed class TenantLimitHttpTests
         }
     }
 
+    [Fact]
+    public async Task SessionSseAndWebSocketsShareTheLifetimeLimit()
+    {
+        await using var f = await Fixture.Create(TenantLimits.Defaults with { WebSockets = 1 });
+        using var sse = await f.Client.GetAsync("api/sessions/uploads/stream", HttpCompletionOption.ResponseHeadersRead);
+        sse.EnsureSuccessStatusCode();
+        using var socket = await f.OpenStreamAsync();
+        Assert.Equal(HttpStatusCode.TooManyRequests, socket.HttpStatusCode);
+    }
+
+    [Fact]
+    public async Task BehindSubscriberDropsWhileItsNeighbourReceivesTheAuthoritativeEvent()
+    {
+        await using var f = await Fixture.Create(null);
+        var owner = (await f.Manager.GetExistingAsync("uploads"))!;
+        var dropped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slow = owner.Subscribe(512, () => dropped.TrySetResult());
+        var fast = owner.Subscribe(512);
+        try
+        {
+            for (int i = 0; i < 4; ++i)
+            {
+                owner.Emit(SessionEventKind.CommandReply, JsonValue.Create(new string('a', 180)));
+                Assert.Equal(SessionEventKind.CommandReply, (await fast.Reader.ReadAsync()).Kind);
+            }
+            await dropped.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.False(slow.Reader.TryRead(out _));
+            owner.Unsubscribe(fast.Id);
+            Assert.False(owner.HasSubscribers);
+        }
+        finally { owner.Unsubscribe(fast.Id); owner.Unsubscribe(slow.Id); }
+    }
+
     [Theory]
     [InlineData("control")]
     [InlineData("slash")]

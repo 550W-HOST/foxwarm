@@ -551,6 +551,13 @@ internal sealed partial class WebUIChannel(
             "/api/sessions/{id}/stream",
             async (string id, HttpContext context) =>
             {
+                var admission = runtime.Manager.Admission;
+                using var connection = admission?.WebSockets.TryOpen();
+                if (admission is not null && connection is null)
+                {
+                    await Limits.RequestLimits.RefuseConnectionAsync(context);
+                    return;
+                }
                 using var use = await UseRouteOwnerAsync(context.Request, id);
                 var hosted = use?.Owner;
                 if (hosted is null)
@@ -567,11 +574,11 @@ internal sealed partial class WebUIChannel(
                     context.RequestAborted,
                     app.Lifetime.ApplicationStopping
                 );
-                var (subscriptionId, reader) = hosted.Subscribe();
+                var (subscriptionId, reader) = hosted.Subscribe(dropped: () => { _ = lifetime.CancelAsync(); });
                 use!.Dispose(); // The installed subscriber now blocks retirement.
                 try
                 {
-                    await SendSse(context, new JsonObject { ["type"] = "connected" });
+                    await SendSse(context, new JsonObject { ["type"] = "connected" }, lifetime.Token);
                     await SendSse(
                         context,
                         new JsonObject
@@ -582,9 +589,9 @@ internal sealed partial class WebUIChannel(
                                     ? hosted.BuildDto()
                                     : scoped.Session(hosted.BuildDto())
                             ),
-                        }
+                        }, lifetime.Token
                     );
-                    await SendSse(context, WebUiContract.ToolCalls(hosted));
+                    await SendSse(context, WebUiContract.ToolCalls(hosted), lifetime.Token);
                     var available = reader.WaitToReadAsync(lifetime.Token).AsTask();
                     var keepAlive = Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token);
                     var deleted = false;
@@ -627,7 +634,7 @@ internal sealed partial class WebUIChannel(
                                     payload["session"] = scoped.Session(session);
                                 await SendSse(
                                     context,
-                                    scoped is null ? payload : InputSender.Without(payload)!
+                                    scoped is null ? payload : InputSender.Without(payload)!, lifetime.Token
                                 );
                             }
                             if (item.Kind == SessionEventKind.Deleted)
@@ -729,14 +736,14 @@ internal sealed partial class WebUIChannel(
             ? await runtime.Catalog.QueryAsync(() => SessionCatalog.Text(runtime.Catalog.Resolve(id)["sessionId"]))
             : null;
 
-    private static async Task SendSse(HttpContext context, JsonObject payload)
+    private static async Task SendSse(HttpContext context, JsonObject payload, CancellationToken token)
     {
         WebUiAccess.Request(context)?.Require();
         await context.Response.WriteAsync(
             "data: " + Foxwarm.Images.ImageTransport.Project(payload)!.ToJsonText() + "\n\n",
-            context.RequestAborted
+            token
         );
-        await context.Response.Body.FlushAsync(context.RequestAborted);
+        await context.Response.Body.FlushAsync(token);
     }
 
     static bool ReadInt(IQueryCollection query, string name, out int? value)

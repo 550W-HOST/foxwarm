@@ -88,6 +88,25 @@ public sealed partial class TenantReplicaTests
     }
 
     [Fact]
+    public async Task WaitingForRemoteHeadersLeavesCapacityForAnotherTenant()
+    {
+        await using var owner = await StartAsync("alpha", "beta");
+        await owner.WhoAmIAsync("alpha");
+        await owner.WhoAmIAsync("beta");
+        await using var edge = await StartReplicaAsync(owner.Database, "replica-b", owner.MeshKey, tenantHolds: 1);
+        var slow = edge.GetAsync("alpha", "/slow");
+        try
+        {
+            await owner.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var denied = await edge.GetAsync("alpha");
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, denied.StatusCode);
+            Assert.StartsWith("beta:", await edge.WhoAmIAsync("beta"));
+        }
+        finally { owner.Continue.TrySetResult(); (await slow).Dispose(); }
+        Assert.StartsWith("alpha:", await edge.WhoAmIAsync("alpha"));
+    }
+
+    [Fact]
     public async Task RemoteNodeFileTransferStreamsPastTheFrontDefaultToTheRealTransferRoute()
     {
         await using var nodes = new NodeFileTransferTests.Fixture();

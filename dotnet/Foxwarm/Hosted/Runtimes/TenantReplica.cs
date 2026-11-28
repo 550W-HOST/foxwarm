@@ -33,6 +33,7 @@ internal sealed record TenantReplicaOptions(
     int ReaderVersion
 )
 {
+    internal int TenantHoldLimit { get; init; } = 128;
     internal required MeshSettings Mesh { get; init; }
 
     /// <summary>This replica's placement role (<see cref="ReplicaRoles"/>).</summary>
@@ -182,7 +183,7 @@ internal sealed class TenantReplica
         var registry = new ReplicaRegistry(control);
         var hostnames = new HostnameDirectory(app);
         using var router = new TenantRouter(Replica, new MeshAuthentication(options.Mesh.Secret, Replica),
-            new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, AcceptingNew, log, stop);
+            new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, AcceptingNew, log, stop, options.TenantHoldLimit);
         var placement = new PlacementMaintenance(app, Replica, options, coordinator, () => administrativelyDraining = true, log);
         // Cancellation is the monotonic SIGTERM latch, including while callbacks are in flight.
         string HealthState() => stop.IsCancellationRequested ? "stopping" : !serving.Task.IsCompletedSuccessfully
