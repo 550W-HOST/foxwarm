@@ -16,7 +16,7 @@ The registry connects files, process primitives, selection, Agent binding and th
 
 | Symbol | Responsibility |
 | --- | --- |
-| `NodeProviderRegistry` constructor | Copies validated startup executable configurations, applies trusted provider parent changes through the registry, reserves fixed provider identities and shares the Session write-reference owner. No subprocess or hot reload occurs in construction. |
+| `NodeProviderRegistry` constructor | Copies validated startup executable configurations, applies trusted provider parent changes through the registry, reserves fixed provider identities and shares the Session write-reference owner. In hosted mode only drivers qualified for this generation are installed; [hosted Provider tenancy](./hosted-provider-tenancy.md) owns declarations, grants, quotas and probes. The registry constructor itself does not launch a driver. |
 | `ListAsync` / `ResolveAsync` | Collect async inventory before batch ancestry admission; maintain same-provider duplicate checks and exact namespace ownership. Fixed native lookup does not invoke optional executables. Executable local IDs are qualified once; calls remove exactly that provider prefix. |
 | `DiscoverProvidersAsync` / `DiscoverProviderAsync` | Full list gathers every configured inventory before topology validation. Exact provider refresh normally keeps its single namespace; a not-yet-registered configured provider parent triggers the same complete snapshot for initial admission, including lifecycle preflight. |
 | `MasterSummary` | Canonical public Main catalog record shared by Session lists and exact fixed-Node inspection; no target probe or fabricated default cwd. |
