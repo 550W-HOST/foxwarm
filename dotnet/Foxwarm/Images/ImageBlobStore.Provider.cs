@@ -303,7 +303,7 @@ internal sealed partial class ImageBlobStore
     private async Task<RasterCodec.Variant> OptimizeAsync(byte[] bytes, string mime, string output, CancellationToken token)
     {
         if (RasterCodec.IsHeif(mime))
-            await Decoder.RequireHeifAsync(token);
+            await Decoder.RequireHeifAsync(bytes.Length, token);
         // Different native encoder policy => separate disposable cache from Source variants.
         var key = Convert.ToHexStringLower(
             SHA256.HashData(
@@ -365,7 +365,10 @@ internal sealed partial class ImageBlobStore
                     {
                         var resultBytes = passthrough ? bytes : payload;
                         var probe = RasterCodec.IsSafeRaster(resultMime)
-                            ? await Decoder.InspectAsync(resultBytes, resultMime, limit: true, CancellationToken.None)
+                            ? await Decoder.InspectAsync(
+                                resultBytes, resultMime, limit: true, CancellationToken.None,
+                                otherRetainedBytes: saved.LongLength + (passthrough ? payload.Length : bytes.Length)
+                            )
                             : null;
                         return new(resultBytes, resultMime, probe?.Width, probe?.Height);
                     }

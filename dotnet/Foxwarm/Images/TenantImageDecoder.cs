@@ -2,16 +2,20 @@ namespace Foxwarm.Images;
 
 // All image stores of a hosted tenant, including independent Session authority stores, carry
 // its immutable database ID. The worker receives neither that ID nor any store or scratch path.
-internal sealed class TenantImageDecoder(int? tenant, ImageDecoderProcess worker)
+internal sealed class TenantImageDecoder(
+    int? tenant,
+    ImageDecoderProcess worker,
+    DecoderAdmission admission
+)
 {
     private static readonly DecoderAdmission Admission = new();
     private static readonly ImageDecoderProcess Worker = new(
         Path.Combine(AppContext.BaseDirectory, "Foxwarm.ImageDecoder"),
         line => MainLog.Diagnostic(line, failure: true)
     );
-    internal static TenantImageDecoder Local { get; } = new(null, Worker);
+    internal static TenantImageDecoder Local { get; } = new(null, Worker, Admission);
 
-    internal static TenantImageDecoder ForTenant(int id) => new(id, Worker);
+    internal static TenantImageDecoder ForTenant(int id) => new(id, Worker, Admission);
 
     internal static TenantImageDecoder ForStorage(Foxwarm.Storage.IStorageContext storage)
     {
@@ -31,10 +35,15 @@ internal sealed class TenantImageDecoder(int? tenant, ImageDecoderProcess worker
         int x = 0,
         int y = 0,
         int width = 0,
-        int height = 0
+        int height = 0,
+        long otherRetainedBytes = 0
     )
     {
-        using var slot = await Admission.EnterAsync(tenant!.Value, token);
+        using var slot = await admission.EnterAsync(
+            tenant!.Value,
+            bytes.LongLength + otherRetainedBytes,
+            token
+        );
         return await worker.RunAsync(op, bytes, mime, flag, x, y, width, height, token);
     }
 
@@ -42,7 +51,8 @@ internal sealed class TenantImageDecoder(int? tenant, ImageDecoderProcess worker
         byte[] bytes,
         string mime,
         bool limit,
-        CancellationToken token
+        CancellationToken token,
+        long otherRetainedBytes = 0
     )
     {
         if (tenant is null)
@@ -54,14 +64,27 @@ internal sealed class TenantImageDecoder(int? tenant, ImageDecoderProcess worker
                 RasterCodec.ValidatePixels(w, h);
             return new(w, h, mime, default);
         }
-        var r = await Run(DecodeOperation.Probe, bytes, mime, token, limit);
+        var r = await Run(
+            DecodeOperation.Probe,
+            bytes,
+            mime,
+            token,
+            limit,
+            otherRetainedBytes: otherRetainedBytes
+        );
         return new(r.Width, r.Height, r.Mime, r.Origin);
     }
 
-    internal async Task RequireHeifAsync(CancellationToken token)
+    internal async Task RequireHeifAsync(int retainedBytes, CancellationToken token)
     {
         if (tenant is not null)
-            await Run(DecodeOperation.RequireHeif, [], "image/heif", token);
+            await Run(
+                DecodeOperation.RequireHeif,
+                [],
+                "image/heif",
+                token,
+                otherRetainedBytes: retainedBytes
+            );
         else
             HeifDecoder.RequirePrerequisite();
     }
@@ -128,6 +151,36 @@ internal sealed class TenantImageDecoder(int? tenant, ImageDecoderProcess worker
         return new(r.Bytes, r.Mime, r.Width, r.Height);
     }
 
+    internal bool NeedsStagedProbe(string mime) =>
+        tenant is not null && ImageInputPolicy.IsProviderImage(mime);
+
+    // The queued request holds only the open, authorized staging stream. Charge its encoded
+    // length while it waits; allocate once, after admission, and probe in that same slot.
+    internal async Task<(byte[] Bytes, bool IsImage)> ProbeStagedAsync(
+        Stream source,
+        int length,
+        string mime,
+        CancellationToken token
+    )
+    {
+        using var slot = await admission.EnterAsync(tenant!.Value, length, token);
+        var bytes = new byte[length];
+        await source.ReadExactlyAsync(bytes, token);
+        if (source.Length != length)
+            throw new ImageProcessingException(DecoderProtocol.Failed);
+        try
+        {
+            var probe = await worker.RunAsync(DecodeOperation.Probe, bytes, mime, token: token);
+            return (bytes, (long)probe.Width * probe.Height <= HeifDecoder.MaxPixels);
+        }
+        catch (ImageInputException error) when (error is not ImageProcessingException)
+        {
+            // Same malformed-metadata handling as ordinary upload preflight: let canonical
+            // ingress deliver its existing error/format semantics.
+            return (bytes, true);
+        }
+    }
+
     internal async Task<string?> IdentifyFileAsync(string path, CancellationToken token)
     {
         if (tenant is null)
@@ -142,7 +195,7 @@ internal sealed class TenantImageDecoder(int? tenant, ImageDecoderProcess worker
                 return null;
             // Wait before buffering the spool, so a backlog of QQ probes cannot retain a
             // separate media-sized array for every waiting request.
-            using var slot = await Admission.EnterAsync(tenant.Value, token);
+            using var slot = await admission.EnterAsync(tenant.Value, length, token);
             var bytes = new byte[(int)length];
             await file.ReadExactlyAsync(bytes, token);
             var r = await worker.RunAsync(DecodeOperation.Identify, bytes, "", token: token);

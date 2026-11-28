@@ -108,8 +108,14 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 byte[]? bytes = null;
                 if (isImage)
                 {
-                    if (source.Length > ImageInputPolicy.MaxBytes)
+                    long length = source.Length;
+                    if (length > ImageInputPolicy.MaxBytes)
                         isImage = false;
+                    else if (sessions.Images.Decoder.NeedsStagedProbe(mime))
+                    {
+                        (bytes, isImage) = await sessions.Images.Decoder.ProbeStagedAsync(source, (int)length, mime, token);
+                        source.Position = 0;
+                    }
                     else
                     {
                         using var buffer = new MemoryStream();
