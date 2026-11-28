@@ -226,7 +226,7 @@ public sealed class HostedBootstrapTests
             if (value is not null)
                 environment["FOXWARM_ROLE"] = value;
             if (value == "master-host")
-                environment["FOXWARM_AGENTS_DIR"] = "operator-agents";
+                environment["FOXWARM_AGENTS_DIR"] = Path.GetTempPath();
             return Foxwarm.Hosted.HostedBootstrap.FromEnvironment(environment).Role;
         }
         Assert.Equal("general", Role(null));

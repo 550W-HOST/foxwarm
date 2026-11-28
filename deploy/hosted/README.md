@@ -167,6 +167,16 @@ For an existing hosted tenant that used a separate Agents volume, stop its repli
 
 The master host opens Agent folders under `FOXWARM_AGENTS_DIR/<tenant_id>/`. The numeric directory belongs to that database tenant for its entire lifetime. Back up the master volume alongside its structured state. After replacing or deleting the operator tenant, preserve or remove its old directory explicitly. A replacement gets its own directory.
 
-To migrate a stopped operator installation, mount its offline copy read-only and the master volume read-write in the import job. Set `FOXWARM_AGENTS_DIR` to the same path the master host uses. Run `foxwarm hosted import --profile operator --tenant <slug> --data-root <copy>`; add `--agents-dir <source>` for a separately staged Agents volume. Use `--dry-run` first to inspect the plan without changing the target. The copy preserves executable modes and symlinks; inspect the report for dangling targets.
+To migrate a stopped operator installation, mount its offline copy read-only and the master volume read-write in the import job. Set `FOXWARM_AGENTS_DIR` to the same existing directory the master host uses. Both the dry run and the real operator import check that this directory is writable and supports directory sync. Run `foxwarm hosted import --profile operator --tenant <slug> --data-root <copy>`; add `--agents-dir <source>` for a separately staged Agents volume. Use `--dry-run` first to inspect the plan without changing the target. The copy preserves executable modes and symlinks; inspect the report for dangling targets.
+
+After a successful import, register the tenant's public hostname **before moving traffic** to the multi-tenant front. For example, to cut over the imported tenant `ops` to `ops.example.com`:
+
+```sh
+printf '%s\n' '{"primaryHostname":"ops.example.com"}' > hostname.json
+foxwarm operator --url https://control.example.net --token-file operator.token tenant set ops hostname.json
+foxwarm operator --url https://control.example.net --token-file operator.token tenant get ops
+```
+
+Check the returned `primaryHostname`, then direct traffic for it to the tenant front. If the import reports `activation-unknown`, inspect the tenant state and the numeric directory named by its ID before taking recovery action. An unacknowledged commit may already have activated the tenant.
 
 If a full operator import failed after writing structured data, stop the import and run `foxwarm hosted import --profile operator --tenant <slug> --abandon`. Wait for the operator service to finish deleting it before importing again. Abandon leaves the source and any already published numeric directory intact.

@@ -39,7 +39,11 @@ internal sealed class AgentFolderImport
             if (string.IsNullOrWhiteSpace(value) || value.Trim() == "~" || value.Trim().StartsWith("~/", StringComparison.Ordinal))
                 throw new ImportRefusedException(unresolved);
             var root = paths.WithConfiguration(new JsonObject { ["paths"] = new JsonObject { ["agentsDir"] = value } }, _ => null).AgentsRoot;
-            var relative = Path.GetRelativePath(AuthorizationPaths.CanonicalPotential(dataRoot), AuthorizationPaths.CanonicalPotential(root));
+            // Missing directories cannot be opened. Keep the appropriate diagnostic for a
+            // missing external location, but resolve existing sources through the filesystem.
+            var relative = Directory.Exists(root)
+                ? Path.GetRelativePath(HostedDirectory.ExistingDirectory(dataRoot), HostedDirectory.ExistingDirectory(root))
+                : Path.GetRelativePath(dataRoot, root);
             if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
                 throw new ImportRefusedException($"The configured Agents directory is outside the offline copy: {root}. Stage it and pass --agents-dir <path>.");
             if (new DirectoryInfo(root).LinkTarget is not null)

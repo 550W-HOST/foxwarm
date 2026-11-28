@@ -127,6 +127,8 @@ internal sealed class ImportReport
         if (Root["tenant"]?["name"] is { } tenant)
             text.Append(" for tenant ").Append(tenant.GetValue<string>());
         text.Append('.').AppendLine();
+        if (Outcome == "activation-unknown")
+            text.AppendLine(Root["error"]?.GetValue<string>());
         foreach (var refusal in Refusals)
             text.Append("  refused: ").AppendLine(refusal);
         foreach (var phase in Root["phases"]!.AsArray().OfType<JsonObject>())

@@ -42,9 +42,15 @@ internal sealed record HostedBootstrap(
 
     internal static string OperatorAgentsRoot(string volume, int tenantId) =>
         System.IO.Path.Combine(
-            System.IO.Path.GetFullPath(volume),
+            RequireAgentsVolume(volume),
             tenantId.ToString(System.Globalization.CultureInfo.InvariantCulture)
         );
+
+    private static string RequireAgentsVolume(string path)
+    {
+        try { return HostedDirectory.ExistingDirectory(path); }
+        catch (IOException error) { throw new HostedBootstrapException("FOXWARM_AGENTS_DIR: " + error.Message); }
+    }
 
     private const string MissingAgentsVolume = "A master-host replica needs FOXWARM_AGENTS_DIR, the persistent volume path for its Agent folders.";
 
@@ -64,8 +70,8 @@ internal sealed record HostedBootstrap(
         var replica = Read(environment, "FOXWARM_REPLICA_ID");
         var role = ReplicaRole(Read(environment, "FOXWARM_ROLE"));
         var agentsVolume = Path(environment, "FOXWARM_AGENTS_DIR");
-        if (role == Lease.ReplicaRoles.MasterHost && agentsVolume is null)
-            throw new HostedBootstrapException(MissingAgentsVolume);
+        if (role == Lease.ReplicaRoles.MasterHost)
+            agentsVolume = RequireAgentsVolume(agentsVolume ?? throw new HostedBootstrapException(MissingAgentsVolume));
         return new(
             Secret(environment, "FOXWARM_DATABASE_URL"),
             Secret(environment, "FOXWARM_MIGRATE_DATABASE_URL"),

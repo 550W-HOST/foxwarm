@@ -22,22 +22,49 @@ internal sealed class PhysicalAgentImport(string source, string volume, ImportRe
     {
         if (string.IsNullOrEmpty(volume))
             throw new ImportRefusedException(MissingVolume);
-        var path = AuthorizationPaths.CanonicalPotential(volume);
-        foreach (var input in new[] { root, dataRoot })
+        var path = RequireVolume(volume);
+        var directory = new DirectoryInfo(root);
+        if (directory.LinkTarget is not null)
+            throw new ImportRefusedException("The Agents directory cannot be a symbolic link.");
+        foreach (var input in directory.Exists ? new[] { root, dataRoot } : new[] { dataRoot })
         {
-            var relative = Path.GetRelativePath(AuthorizationPaths.CanonicalPotential(input), path);
+            string physical;
+            try { physical = HostedDirectory.ExistingDirectory(input); }
+            catch (IOException error) { throw new ImportRefusedException(error.Message); }
+            var relative = Path.GetRelativePath(physical, path);
             if (!Path.IsPathRooted(relative) && relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
                 throw new ImportRefusedException("FOXWARM_AGENTS_DIR must be outside the installation being imported.");
         }
         var plan = new PhysicalAgentImport(root, path, report);
-        var directory = new DirectoryInfo(root);
-        if (directory.LinkTarget is not null)
-            throw new ImportRefusedException("The Agents directory cannot be a symbolic link.");
         if (directory.Exists)
             plan.ScanDirectory(directory, "", 0);
         else if (required)
             throw new ImportRefusedException("Agents directory not found: " + root);
         return plan;
+    }
+
+    internal static string RequireVolume(string volume, bool forPublication = true)
+    {
+        try
+        {
+            var path = HostedDirectory.ExistingDirectory(volume);
+            // The dry run must not create anything on the volume. access checks the effective
+            // mount/ACL permissions in the unprivileged import job, including a read-only mount.
+            if (!OperatingSystem.IsWindows() && Access(path, 3) != 0) // W_OK | X_OK
+                throw new IOException("The operator Agent volume is not writable: " + path);
+            if (forPublication) SyncDirectory(path);
+            return path;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new ImportRefusedException("FOXWARM_AGENTS_DIR: " + error.Message);
+        }
+    }
+
+    private static void SyncDirectory(string path)
+    {
+        if (DirectorySync.Sync(path) != DirectorySyncResult.Synced)
+            throw new IOException("The operator Agent volume does not support syncing directories: " + path);
     }
 
     private void ScanDirectory(DirectoryInfo directory, string prefix, int depth)
@@ -74,7 +101,6 @@ internal sealed class PhysicalAgentImport(string source, string volume, ImportRe
     internal async Task<long> StageAsync(int tenantId, CancellationToken token)
     {
         RequireEmptyDestination(tenantId);
-        Directory.CreateDirectory(volume);
         staged = Path.Combine(volume, ".import-" + tenantId.ToString(System.Globalization.CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N"));
         HostedImport.CreatePrivateDirectory(staged);
         foreach (var entry in entries)
@@ -96,6 +122,7 @@ internal sealed class PhysicalAgentImport(string source, string volume, ImportRe
                 await input.CopyToAsync(output, token);
                 if (!OperatingSystem.IsWindows())
                     File.SetUnixFileMode(target, Permissions(original));
+                output.Flush(flushToDisk: true);
             }
         }
         return FileCount;
@@ -145,7 +172,13 @@ internal sealed class PhysicalAgentImport(string source, string volume, ImportRe
         }
         if (!OperatingSystem.IsWindows())
             foreach (var entry in entries.AsEnumerable().Reverse().Where(e => e.Directory && e.Link is null))
-                File.SetUnixFileMode(Path.Combine(staged!, entry.Path), Permissions(Path.Combine(source, entry.Path)));
+            {
+                token.ThrowIfCancellationRequested();
+                var path = Path.Combine(staged!, entry.Path);
+                File.SetUnixFileMode(path, Permissions(Path.Combine(source, entry.Path)));
+                SyncDirectory(path);
+            }
+        SyncDirectory(staged!);
         return FileCount;
     }
 
@@ -166,7 +199,8 @@ internal sealed class PhysicalAgentImport(string source, string volume, ImportRe
             if (error == 17 || error == (OperatingSystem.IsMacOS() ? 66 : 39)) throw Conflict();
             throw new IOException("Cannot publish the operator Agent directory: " + destination, new Win32Exception(error));
         }
-        staged = null;
+        staged = null; // Publication is irreversible, even if syncing the rename fails.
+        SyncDirectory(volume);
     }
 
     internal void ReportPublishedLinks()
@@ -188,7 +222,6 @@ internal sealed class PhysicalAgentImport(string source, string volume, ImportRe
 
     internal static void RemoveStaging(string volume, int tenantId)
     {
-        if (!Directory.Exists(volume)) return;
         var prefix = ".import-" + tenantId.ToString(System.Globalization.CultureInfo.InvariantCulture) + "-";
         foreach (var path in Directory.EnumerateDirectories(volume, prefix + "*"))
             if (Guid.TryParseExact(Path.GetFileName(path)[prefix.Length..], "N", out _))

@@ -54,7 +54,7 @@ public sealed class TenantRuntimeConstructionTests
             return HostedEntry.CreateTenantRuntimeAsync(
                 new TenantRuntimeContext(activation, new TenantDb(App, lease.Id, lease.Epoch), server),
                 profile == TenantProfile.Operator
-                    ? Bootstrap with { Role = ReplicaRoles.MasterHost, AgentsVolume = Path.Combine(temp.Path, "operator-agents") }
+                    ? Bootstrap with { Role = ReplicaRoles.MasterHost, AgentsVolume = Directory.CreateDirectory(Path.Combine(temp.Path, "operator-agents")).FullName }
                     : Bootstrap,
                 deployment
             );
