@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using Foxwarm.Hosted.Providers;
 using Foxwarm.Nodes;
@@ -18,17 +19,41 @@ internal sealed partial class OperatorStore
         database.ClusterAsync(
             async (tx, ct) =>
             {
-                var result = await Scalar(
-                    tx,
+                // Select only the public fields. PostgreSQL's JSON text keeps a missing
+                // key (SQL NULL) distinct from an invalid JSON null or quoted number.
+                await using var cmd = tx.Command(
                     """
-                    SELECT coalesce((SELECT jsonb_object_agg(provider_id,$2::jsonb || quotas) FROM provider_grants g WHERE g.tenant_id=t.tenant_id),'{}')::text
-                    FROM tenants t WHERE t.name=$1
+                    SELECT g.provider_id,(g.quotas->'nodes')::text,(g.quotas->'execs')::text,(g.quotas->'lifecycleActionsPerHour')::text
+                    FROM tenants t LEFT JOIN provider_grants g USING(tenant_id) WHERE t.name=$1 ORDER BY g.provider_id
                     """,
-                    ct,
-                    slug,
-                    Quotas(new()).ToJsonString()
+                    slug
                 );
-                return JsonNode.Parse(result as string ?? throw Missing())!;
+                await using var row = await cmd.ExecuteReaderAsync(ct);
+                if (!await row.ReadAsync(ct))
+                    throw Missing();
+                var result = new JsonObject();
+                var defaults = new ProviderQuotas();
+                do
+                {
+                    if (row.IsDBNull(0))
+                        break;
+                    var id = row.GetString(0);
+                    int Count(int field, int fallback)
+                    {
+                        if (row.IsDBNull(field)) return fallback;
+                        if (int.TryParse(row.GetString(field), NumberStyles.None, CultureInfo.InvariantCulture, out var value))
+                            return value;
+                        throw new OperatorProblem(409, $"Provider '{id}' has invalid stored quotas. Replace or remove its grant.");
+                    }
+                    result[id] = Quotas(
+                        new(
+                            Count(1, defaults.Nodes),
+                            Count(2, defaults.Execs),
+                            Count(3, defaults.LifecycleActionsPerHour)
+                        )
+                    );
+                } while (await row.ReadAsync(ct));
+                return (JsonNode)result;
             },
             token
         );
