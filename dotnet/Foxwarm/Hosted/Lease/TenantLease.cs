@@ -370,9 +370,12 @@ internal sealed class TenantLease
         CancellationToken token,
         ImportKind kind = ImportKind.Full,
         string? agentPlan = null,
-        TenantProfile profile = TenantProfile.Hosted
+        TenantProfile profile = TenantProfile.Hosted,
+        byte[]? sourceFingerprint = null
     )
     {
+        if (kind == ImportKind.Full && sourceFingerprint is not { Length: 32 })
+            throw new ArgumentException("Full import requires an installation fingerprint.", nameof(sourceFingerprint));
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         var acquisitionStart = System.Diagnostics.Stopwatch.GetTimestamp();
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
@@ -459,7 +462,7 @@ internal sealed class TenantLease
             return null;
         }
         await using var update = new NpgsqlCommand(
-            "WITH marked AS (UPDATE tenants SET state = $4, agent_import_plan = COALESCE($5::jsonb, agent_import_plan) WHERE name = $1 RETURNING tenant_id)"
+            "WITH marked AS (UPDATE tenants SET state = $4, agent_import_plan = COALESCE($5::jsonb, agent_import_plan), import_fingerprint = COALESCE($6, import_fingerprint) WHERE name = $1 RETURNING tenant_id)"
                 + " UPDATE tenant_leases l SET owner_replica = $2, requested_action = NULL, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3)"
                 + " FROM marked WHERE l.tenant_id = marked.tenant_id RETURNING l.tenant_id, l.epoch",
@@ -471,21 +474,41 @@ internal sealed class TenantLease
         update.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
         update.Parameters.Add(new NpgsqlParameter<string> { TypedValue = kind == ImportKind.Full ? "importing" : "importing-agents" });
         update.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Text, Value = (object?)agentPlan ?? DBNull.Value });
+        update.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Bytea, Value = (object?)sourceFingerprint ?? DBNull.Value });
         int tenantId;
-        await using (var reader = await update.ExecuteReaderAsync(token).ConfigureAwait(false))
+        try
         {
-            if (!await reader.ReadAsync(token).ConfigureAwait(false))
-                return null;
-            tenantId = reader.GetInt32(0);
-            epoch = reader.GetInt64(1);
+            await using (var reader = await update.ExecuteReaderAsync(token).ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(token).ConfigureAwait(false))
+                    return null;
+                tenantId = reader.GetInt32(0);
+                epoch = reader.GetInt64(1);
+            }
+        }
+        catch (PostgresException error) when (error.SqlState == "23505" && error.ConstraintName == "tenants_live_import")
+        {
+            // The winning import may have passed preflight at the same time. Roll back
+            // the losing destination (including its creation), then read the winner.
+            await transaction.RollbackAsync(token);
+            await using var check = new NpgsqlCommand(OtherLiveImport, connection);
+            check.Parameters.Add(new NpgsqlParameter<byte[]> { TypedValue = sourceFingerprint! });
+            check.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
+            if (await check.ExecuteScalarAsync(token) is string slug)
+                throw new LeaseRefusedException(DuplicateImport(slug));
+            return null; // The conflicting owner has already entered deletion; retry admission.
         }
         await transaction.CommitAsync(token).ConfigureAwait(false);
         return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart, Profile = profile };
     }
 
-    // The import job hands an interrupted full operator import to the operator service's
+    internal const string OtherLiveImport = "SELECT name FROM tenants WHERE import_fingerprint=$1 AND name<>$2 AND state<>'deleting'";
+    internal static string DuplicateImport(string slug) =>
+        $"This installation was already imported into tenant '{slug}'. Importing it again would share its Node and webhook credentials. Delete that tenant first.";
+
+    // The import job hands an interrupted full import to the operator service's
     // deletion worker. It has no operator API credential and does not erase structured data.
-    internal async Task<(int Id, long Epoch)> AbandonOperatorImportAsync(Action<int> removeStaging)
+    internal async Task<(int Id, long Epoch)> AbandonImportAsync(TenantProfile profile, Action<int>? removeStaging)
     {
         await using var connection = await database.OpenAsync(default);
         await using var tx = await connection.BeginTransactionAsync();
@@ -495,8 +518,8 @@ internal sealed class TenantLease
         {
             target.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
             await using var row = await target.ExecuteReaderAsync();
-            if (!await row.ReadAsync() || row.GetString(1) != "operator" || row.GetString(2) != "importing")
-                throw new LeaseRefusedException("Tenant " + Tenant + " isn't an incomplete operator import.");
+            if (!await row.ReadAsync() || row.GetString(1) != TenantProfiles.Name(profile) || row.GetString(2) != "importing")
+                throw new LeaseRefusedException($"Tenant '{Tenant}' has no unfinished full import for the {TenantProfiles.Name(profile)} profile.");
             id = row.GetInt32(0);
             RequireReader(row.GetInt32(3));
         }
@@ -510,7 +533,7 @@ internal sealed class TenantLease
         await using var change = new NpgsqlCommand("UPDATE tenants SET state = 'deleting' WHERE tenant_id = $1", connection, tx);
         change.Parameters.Add(new NpgsqlParameter<int> { TypedValue = id });
         await change.ExecuteNonQueryAsync();
-        removeStaging(id);
+        removeStaging?.Invoke(id);
         await tx.CommitAsync();
         return (id, epoch);
     }

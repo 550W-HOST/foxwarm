@@ -119,18 +119,23 @@ internal static class HostedImport
         return exit;
     }
 
-    internal static async Task<int> AbandonOperatorAsync(PgDatabase app, PgDatabase database, string tenant, string? volume, string reportPath, TextWriter output)
+    internal static async Task<int> AbandonAsync(PgDatabase app, PgDatabase database, string tenant, TenantProfile profile, string? volume, string reportPath, TextWriter output)
     {
         var report = new ImportReport();
-        report.Root["tenant"] = new JsonObject { ["name"] = tenant, ["profile"] = "operator" };
+        report.Root["tenant"] = new JsonObject { ["name"] = tenant, ["profile"] = TenantProfiles.Name(profile) };
         try
         {
             await SchemaMigrator.RequireCompatibleAsync(app);
-            if (string.IsNullOrEmpty(volume))
-                throw new ImportRefusedException(PhysicalAgentImport.MissingVolume);
+            Action<int>? removeStaging = null;
+            if (profile == TenantProfile.Operator)
+            {
+                if (string.IsNullOrEmpty(volume))
+                    throw new ImportRefusedException(PhysicalAgentImport.MissingVolume);
+                var physicalVolume = PhysicalAgentImport.RequireVolume(volume, forPublication: false);
+                removeStaging = id => PhysicalAgentImport.RemoveStaging(physicalVolume, id);
+            }
             var lease = new TenantLease(database, tenant, AgentCatalog.ReaderVersion);
-            var physicalVolume = PhysicalAgentImport.RequireVolume(volume, forPublication: false);
-            var deleted = await lease.AbandonOperatorImportAsync(id => PhysicalAgentImport.RemoveStaging(physicalVolume, id));
+            var deleted = await lease.AbandonImportAsync(profile, removeStaging);
             report.Root["tenant"]!["state"] = "deleting";
             report.Root["tenant"]!["id"] = deleted.Id;
             report.Root["tenant"]!["deletionEpoch"] = deleted.Epoch;
@@ -169,6 +174,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
     private SessionCatalog? sourceCatalog;
     private ConfigSplitResult? config;
     private InstanceKeys? sourceKeys;
+    private byte[]? sourceFingerprint;
     internal ImportRun(
         HostedImportOptions options,
         ImportDatabases databases,
@@ -211,9 +217,14 @@ internal sealed partial class ImportRun : IAsyncDisposable
         CheckSourceIdentityRanges();
         CheckSourceContent();
         report.Phase("configuration split", () => config = SplitConfiguration(), _ => config?.Blocks.Count ?? 0);
-        var plan = report.Phase("plan", Plan, items => items.Count);
-        report.Root["plan"] = plan;
         var target = await InspectTargetAsync().ConfigureAwait(false);
+        var fileBytes = target.Id is { } id && options.Profile == TenantProfile.Hosted && report.Refusals.Count == 0
+            ? (await TenantPolicy.ReadAsync(new TenantDb(databases.App, id, 0), stop)).Limits.AgentStore.FileBytes
+            : AgentStoreLimits.Default.FileBytes;
+        var plan = report.Phase("plan", () => Plan(fileBytes), items => items.Count);
+        report.Root["plan"] = plan;
+        if (report.Refusals.Count == 0 && target.Id is { } existing)
+            physicalFolders?.RequireEmptyDestination(existing);
         if (report.Refusals.Count > 0)
         {
             report.Outcome = "refused";
@@ -225,7 +236,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
             report.Outcome = "dry-run";
             return HostedImport.Imported;
         }
-        var exit = await ImportAsync(target).ConfigureAwait(false);
+        var exit = await ImportAsync(target.Epoch).ConfigureAwait(false);
         if (exit == HostedImport.Imported)
             physicalFolders?.ReportPublishedLinks();
         return exit;
@@ -241,7 +252,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
             Token = token;
             await WriteAsync();
             await VerifyAsync();
-        }, stop, profile: options.Profile, publish: () => physicalFolders?.Publish());
+        }, stop, profile: options.Profile, publish: () => physicalFolders?.Publish(), writesAgentBlobs: agentFolders?.WritesBlobs == true, sourceFingerprint: sourceFingerprint);
 
     // ---- Preflight (design §8.1 step 1) ----
 
@@ -298,6 +309,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
             report.Refuse(
                 "keys/secrets.key is missing. The installation's key becomes the tenant data key (it decrypts the secrets, OAuth grants and the text-redaction cache), so the import needs it; restore it from the backup."
             );
+        sourceFingerprint = sourceKeys?.Derive("hosted-import-identity");
     }
 
     // Checks that need the SQLite copies: the catalog schema, the documents of its members,
@@ -426,7 +438,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
 
     // The tenant must be new, or exist without any rows (`db migrate` creates the configured
     // tenant). Returns the epoch to expect at acquisition, null for a new tenant.
-    private async Task<long?> InspectTargetAsync()
+    private async Task<(int? Id, long? Epoch)> InspectTargetAsync()
     {
         try
         {
@@ -435,9 +447,14 @@ internal sealed partial class ImportRun : IAsyncDisposable
         catch (SchemaIncompatibleException error)
         {
             report.Refuse("The hosted schema isn't compatible with this build: " + error.Message);
-            return null;
+            return default;
         }
         var probe = new TenantDb(databases.App, 0, 0);
+        if (sourceFingerprint is not null && probe.Read(tx => tx.Scalar(TenantLease.OtherLiveImport, sourceFingerprint, options.Tenant)) is string duplicate)
+        {
+            report.Refuse(TenantLease.DuplicateImport(duplicate));
+            return default;
+        }
         var id = probe.Read(tx => tx.Scalar("SELECT tenant_id FROM tenants WHERE name = $1", options.Tenant) as int?);
         if (options.Profile == TenantProfile.Operator)
         {
@@ -447,7 +464,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
         if (id is null)
         {
             report.Root["tenant"]!["existed"] = false;
-            return null;
+            return default;
         }
         report.Root["tenant"]!["existed"] = true;
         var tenant = new TenantDb(databases.App, id.Value, 0);
@@ -482,7 +499,9 @@ internal sealed partial class ImportRun : IAsyncDisposable
                     while (reader.Read())
                         names.Add(reader.GetString(0));
                 var filled = names
-                    .Where(name => tx.Scalar($"SELECT 1 FROM {ImportTables.Quote(name)} LIMIT 1") is not null)
+                    .Where(name => tx.Scalar(name == "agent_file_usage"
+                        ? "SELECT 1 FROM agent_file_usage WHERE bytes<>0 OR entries<>0 OR generation<>0 LIMIT 1"
+                        : $"SELECT 1 FROM {ImportTables.Quote(name)} LIMIT 1") is not null)
                     .ToList();
                 return (tenantState, leaseEpoch, leaseFree, leaseOwner, filled, profile);
             },
@@ -493,22 +512,18 @@ internal sealed partial class ImportRun : IAsyncDisposable
             report.Refuse("This deployment already has an operator tenant.");
         else if (profile != TenantProfiles.Name(options.Profile))
             report.Refuse(TenantLease.ImportProfileMismatch(options.Profile, options.Tenant));
-        else if (options.Profile == TenantProfile.Operator && state == "importing" && tables.Count > 0)
-            report.Refuse($"This operator import is incomplete. Run foxwarm hosted import --profile operator --tenant {options.Tenant} --abandon, then import again once the tenant is deleted.");
+        else if (tables.Count > 0 && state == "importing")
+        {
+            var profileOption = options.Profile == TenantProfile.Operator ? " --profile operator" : "";
+            report.Refuse($"Tenant '{options.Tenant}' has data from a failed import, so the import can't be retried there. To delete the tenant and its partial data, run `foxwarm hosted import{profileOption} --tenant {options.Tenant} --abandon`, then create a new tenant and import again.");
+        }
         else if (tables.Count > 0)
-            report.Refuse(
-                $"Tenant {options.Tenant} ({state}) already holds data in {string.Join(", ", tables)}. An import only writes into an empty tenant."
-                    + (state == "importing"
-                        ? " It is left over from a failed import, which no replica acquires; import again under a new --tenant name, or drop and recreate the database (`foxwarm db migrate`) if it holds no other tenant."
-                        : " Import under a new --tenant name.")
-            );
+            report.Refuse($"Tenant '{options.Tenant}' ({state}) already has data in {string.Join(", ", tables)}. Import only writes into an empty tenant.");
         else if (!free)
             report.Refuse($"Tenant {options.Tenant}'s lease is held by {owner}. Stop its replicas before importing.");
         else if (state is not ("active" or "importing"))
             report.Refuse($"Tenant {options.Tenant} is {state}; an import needs a new or empty tenant.");
-        else if (options.Profile == TenantProfile.Operator)
-            physicalFolders!.RequireEmptyDestination(id.Value);
-        return epoch;
+        return (id, epoch);
     }
 
     public async ValueTask DisposeAsync()

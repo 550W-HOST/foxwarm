@@ -87,7 +87,8 @@ public sealed class OperatorDeletionTests
                 TimeSpan.FromSeconds(1),
                 default,
                 agentsOnly ? ImportKind.Agents : ImportKind.Full,
-                agentsOnly ? "{}" : null
+                agentsOnly ? "{}" : null,
+                sourceFingerprint: agentsOnly ? null : new byte[32]
             )
         );
         Assert.Equal("suspended", (string?)(await store.SuspendAsync("online", default))["state"]);
@@ -317,7 +318,8 @@ public sealed class OperatorDeletionTests
                 TimeSpan.FromSeconds(1),
                 default,
                 agentsOnly ? ImportKind.Agents : ImportKind.Full,
-                agentsOnly ? "{}" : null
+                agentsOnly ? "{}" : null,
+                sourceFingerprint: agentsOnly ? null : new byte[32]
             )
         );
         Assert.True(await lease.RenewAsync(grant, TimeSpan.FromSeconds(30), default));

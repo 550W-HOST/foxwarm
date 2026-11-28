@@ -300,7 +300,7 @@ public sealed class TenantLeaseTests
         await lease.ReleaseAsync(grant, CancellationToken.None);
         await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'hosted', pinned_role = NULL");
         var importing = new TenantLease(database.OpenOwner(), PostgresServer.Tenant, 2);
-        var import = (await importing.TryAcquireForImportAsync("import:1", grant.Epoch, Slow.Ttl, TimeSpan.FromSeconds(5), CancellationToken.None))!;
+        var import = (await importing.TryAcquireForImportAsync("import:1", grant.Epoch, Slow.Ttl, TimeSpan.FromSeconds(5), CancellationToken.None, sourceFingerprint: new byte[32]))!;
         Assert.Null(import.Role);
         Assert.True(await importing.RenewAsync(import, Slow.Ttl, CancellationToken.None));
     }
@@ -313,7 +313,7 @@ public sealed class TenantLeaseTests
         await using var database = await PrepareAsync();
         await using var owner = database.OpenOwner();
         var lease = new TenantLease(owner, PostgresServer.Tenant, 2);
-        var import = (await lease.TryAcquireForImportAsync("import:1", 0, Slow.Ttl, TimeSpan.FromSeconds(5), CancellationToken.None))!;
+        var import = (await lease.TryAcquireForImportAsync("import:1", 0, Slow.Ttl, TimeSpan.FromSeconds(5), CancellationToken.None, sourceFingerprint: new byte[32]))!;
         var (holder, holding) = await HoldLeaseRowAsync(database, import.TenantId);
         await using (holder)
         {

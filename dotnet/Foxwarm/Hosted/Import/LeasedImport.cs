@@ -12,7 +12,7 @@ internal static class LeasedImport
         PgDatabase app, PgDatabase ownerDatabase, string tenant, long? expectedEpoch, ImportKind kind,
         LeaseTimings timings, BlobSettings? blobs, string work, ImportReport report,
         Func<PostgresStorageContext, TenantDb, CancellationToken, Task> run, CancellationToken stop, string? agentPlan = null,
-        TenantProfile profile = TenantProfile.Hosted, Action? publish = null)
+        TenantProfile profile = TenantProfile.Hosted, Action? publish = null, bool writesAgentBlobs = false, byte[]? sourceFingerprint = null)
     {
         var state = kind == ImportKind.Full ? "importing" : "importing-agents";
         var lease = new TenantLease(ownerDatabase, tenant, AgentCatalog.ReaderVersion);
@@ -20,7 +20,7 @@ internal static class LeasedImport
         LeaseGrant? grant;
         try
         {
-            grant = await lease.TryAcquireForImportAsync(replica, expectedEpoch, timings.Ttl, timings.RenewInterval, stop, kind, agentPlan, profile);
+            grant = await lease.TryAcquireForImportAsync(replica, expectedEpoch, timings.Ttl, timings.RenewInterval, stop, kind, agentPlan, profile, sourceFingerprint);
         }
         catch (LeaseRefusedException error)
         {
@@ -49,6 +49,13 @@ internal static class LeasedImport
         {
             await using var storage = new PostgresStorageContext(db, Path.Combine(work, "scratch"));
             await storage.OpenBlobsAsync(blobs ?? new BlobSettings(BlobBackend.Postgres, null), tenant, cancel.Token);
+            if (profile == TenantProfile.Hosted && kind != ImportKind.AbandonAgents)
+            {
+                var (limits, _) = await TenantPolicy.ReadAsync(db, cancel.Token);
+                storage.AgentStoreLimits = () => limits.AgentStore;
+                if (writesAgentBlobs && storage.AgentFileBlobs is S3BlobStore remote)
+                    await WaitForInventoryAsync(db, remote.InventoryDestination, cancel.Token);
+            }
             await run(storage, owner, cancel.Token);
             if (report.Failures.Count > 0)
             {
@@ -103,6 +110,30 @@ internal static class LeasedImport
                     await lease.ReleaseAsync(grant, CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception) { }
+        }
+    }
+
+    // The operator scans active leases, including import leases. Never hold the usage or
+    // lease lock while waiting: inventory and lease renewal must both be able to commit.
+    private static async Task WaitForInventoryAsync(TenantDb db, string destination, CancellationToken token)
+    {
+        var announced = false;
+        while (true)
+        {
+            var inventory = await db.WriteAsync(async (tx, ct) =>
+            {
+                using var command = tx.Command("SELECT blob_inventory FROM agent_file_usage");
+                return await command.ExecuteScalarAsync(ct) as string;
+            }, token: token);
+            if (inventory == destination) return;
+            if (inventory is not null)
+                throw new ImportRefusedException("The recorded Agent blob inventory belongs to a different destination. Check the import and operator blob settings.");
+            if (!announced)
+            {
+                Console.Error.WriteLine("[import] Waiting for the hosted operator to inventory this tenant's Agent files. Check that it is running with the same blob backend and destination.");
+                announced = true;
+            }
+            await Task.Delay(TimeSpan.FromSeconds(1), token);
         }
     }
 

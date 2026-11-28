@@ -69,7 +69,7 @@ internal static class HostedCli
         "Usage: foxwarm db migrate [--app-role <role>] [--operator-role <role>] | foxwarm db status\n"
         + "       foxwarm hosted import --data-root <dir> [--agents-dir <path>] [--profile hosted|operator] [--tenant <name>] [--journal] [--dry-run]\n"
         + "                              [--report <file>] [--deployment-config <file>]\n"
-        + "       foxwarm hosted import --profile operator --tenant <name> --abandon [--report <file>]\n"
+        + "       foxwarm hosted import [--profile hosted|operator] --tenant <name> --abandon [--report <file>]\n"
         + "       foxwarm hosted agents import --tenant <name> (--from <dir> | --abandon) [--report <file>] [--deployment-config <file>]\n"
         + "       foxwarm hosted token [--tenant <name>]\n"
         + "       foxwarm hosted health [--ready]";
@@ -236,7 +236,7 @@ internal static class HostedCli
                     return UsageError;
             }
         if ((dataRoot is null) != abandon || string.IsNullOrWhiteSpace(tenant)
-            || abandon && !agentsOnly && (!namedTenant || profile != TenantProfile.Operator || dryRun || journal || agentsDirectory is not null))
+            || abandon && !agentsOnly && (!namedTenant || dryRun || journal || agentsDirectory is not null))
         {
             await error.WriteLineAsync(Usage);
             return UsageError;
@@ -250,7 +250,7 @@ internal static class HostedCli
         if (agentsOnly)
             return await Import.HostedAgentImport.RunAsync(app, owner, tenant, dataRoot, abandon, report, blobs, output);
         if (abandon)
-            return await Import.HostedImport.AbandonOperatorAsync(app, owner, tenant, bootstrap.AgentsVolume, report, output);
+            return await Import.HostedImport.AbandonAsync(app, owner, tenant, profile, bootstrap.AgentsVolume, report, output);
         var (kek, _) = bootstrap.RequireKeks();
         return await Import.HostedImport.RunAsync(
             new Import.HostedImportOptions(dataRoot!, tenant, journal, dryRun, report) { Blobs = blobs, AgentsDirectory = agentsDirectory, Profile = profile, AgentsVolume = bootstrap.AgentsVolume },

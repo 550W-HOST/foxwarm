@@ -16,6 +16,7 @@ internal sealed class AgentFolderImport
     }
 
     private readonly List<Entry> entries = [];
+    internal bool WritesBlobs => entries.Any(entry => entry.Length > PgAgentFileStore.InlineBytes);
     internal int FileCount => entries.Count(entry => !entry.Directory);
 
     internal static (string Root, bool Required) SourceRoot(string dataRoot, JsonObject? config, string? staged)

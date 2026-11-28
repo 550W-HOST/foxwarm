@@ -56,7 +56,8 @@ internal sealed partial class OperatorStore
     // One page or SQL chunk per tenant per round. IDs paginate the queue, so a retained
     // object or large tenant cannot stop work for another. Restart needs only the DB rows.
     internal Task RunDeletionLoopAsync(CancellationToken ct) =>
-        Task.WhenAll(RecoverSuspensionsAsync(ct), RecoverDeletionsAsync(ct));
+        Task.WhenAll(RecoverSuspensionsAsync(ct), RecoverDeletionsAsync(ct),
+            deletionS3 is null ? Task.CompletedTask : new AgentBlobMaintenance(database, deletionS3).RunAsync(ct));
 
     private async Task RecoverDeletionsAsync(CancellationToken ct)
     {

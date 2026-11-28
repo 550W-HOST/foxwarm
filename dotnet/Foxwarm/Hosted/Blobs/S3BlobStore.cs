@@ -47,6 +47,24 @@ internal sealed class S3BlobStore : IBlobStore
     /// <summary>Whether creates use <c>If-None-Match: *</c>; otherwise <c>HEAD</c> then <c>PUT</c>.</summary>
     internal bool ConditionalWrites { get; }
 
+    internal string InventoryDestination => Destination(client.Config.ServiceURL, bucket);
+    internal static string Destination(string endpoint, string bucket) => new Uri(endpoint).AbsoluteUri + "|" + bucket;
+
+    // Agent content uses a separate client with SDK retries disabled. Each fresh reservation
+    // grants exactly one dispatch, including on endpoints without conditional-write support.
+    internal async Task PutAgentFileOnceAsync(string key, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    {
+        if (client.Config.MaxErrorRetry != 0) throw new InvalidOperationException("Agent file PUTs require a single-attempt client.");
+        PutOutcome result;
+        try { result = await PutAsync(root + key, bytes, ConditionalWrites, ct); }
+        catch (Exception error) when (S3Blobs.Failure(error, key) is { } failure)
+        {
+            throw failure;
+        }
+        if (result is not (PutOutcome.Created or PutOutcome.Exists))
+            throw new IOException("The Agent file upload did not complete. Retry the write.");
+    }
+
     public bool Exists(string key) => Wait(() => HeadExistsAsync(root + key, CancellationToken.None));
 
     public Task<bool> ExistsAsync(string key, CancellationToken token) => HeadExistsAsync(root + key, token);
@@ -364,16 +382,18 @@ internal static class S3Blobs
             ? "t/" + tenant + "/"
             : throw new ArgumentException("Invalid tenant name for blob keys.", nameof(tenant));
 
-    internal static AmazonS3Client Client(S3BlobSettings settings, string accessKeyId, string secretAccessKey) =>
-        new(
+    internal static AmazonS3Client Client(S3BlobSettings settings, string accessKeyId, string secretAccessKey, bool singleAttempt = false)
+    {
+        var config = new AmazonS3Config
+        {
+            ServiceURL = settings.Endpoint.ToString(), AuthenticationRegion = settings.Region, ForcePathStyle = settings.PathStyle,
+        };
+        if (singleAttempt) config.MaxErrorRetry = 0;
+        return new(
             new BasicAWSCredentials(accessKeyId, secretAccessKey),
-            new AmazonS3Config
-            {
-                ServiceURL = settings.Endpoint.ToString(),
-                AuthenticationRegion = settings.Region,
-                ForcePathStyle = settings.PathStyle,
-            }
+            config
         );
+    }
 
     /// <summary>
     /// The client of the deployment's S3 settings and whether its endpoint supports conditional

@@ -413,3 +413,16 @@ public sealed class PostgresAgentFilesContractTests : AgentFilesContractTests
         );
     }
 }
+
+[Trait("Backend", "postgres")]
+[Trait("Backend", "s3")]
+public sealed class S3AgentFilesContractTests : AgentFilesContractTests
+{
+    private protected override async Task<StoreUnderTest> CreateAsync()
+    {
+        var fixture = await AgentBlobS3Fixture.OpenAsync();
+        await fixture.InventoryAsync();
+        return new StoreUnderTest(fixture.Store,
+            name => fixture.Store.CreateAgentAsync(name, ["memory"], [], default), fixture.DisposeAsync);
+    }
+}

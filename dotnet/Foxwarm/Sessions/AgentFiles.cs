@@ -237,6 +237,9 @@ internal static class AgentFileErrors
     internal static AgentStoreQuotaException TotalTooLarge(AgentStoreLimits limit) =>
         new("totalBytes", $"Agent files are full: this write would exceed the {Size(limit.TotalBytes)} limit.");
 
+    internal static AgentStoreQuotaException RetainedTooLarge(decimal limit) =>
+        new("retainedBytes", $"Agent file storage is full ({Size(limit)} limit). Remove some files, then try again.");
+
     internal static AgentStoreQuotaException TooManyFiles(AgentStoreLimits limit) =>
         new(
             "files",
@@ -246,9 +249,9 @@ internal static class AgentFileErrors
         );
 
     // 2 GiB, 64 MiB; a limit that isn't a whole number of either is shown in bytes.
-    private static string Size(long bytes) =>
-        bytes >= 1L << 30 && bytes % (1L << 30) == 0 ? $"{bytes >> 30} GiB"
-        : bytes >= 1L << 20 && bytes % (1L << 20) == 0 ? $"{bytes >> 20} MiB"
+    private static string Size(decimal bytes) =>
+        bytes >= 1L << 30 && bytes % (1L << 30) == 0 ? $"{bytes / (1L << 30)} GiB"
+        : bytes >= 1L << 20 && bytes % (1L << 20) == 0 ? $"{bytes / (1L << 20)} MiB"
         : bytes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + " bytes";
 
     internal static IOException Root() =>

@@ -70,6 +70,7 @@ internal sealed partial class PostgresStorageContext : IStorageContext, IAsyncDi
         finally
         {
             s3Client?.Dispose();
+            agentBlobClient?.Dispose();
         }
     }
 

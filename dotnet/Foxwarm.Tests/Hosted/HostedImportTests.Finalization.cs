@@ -32,7 +32,7 @@ public sealed partial class HostedImportTests
                 await using var command = new NpgsqlCommand("SELECT tenant_id FROM tenant_leases FOR UPDATE", blocker, tx);
                 await command.ExecuteScalarAsync(token);
                 token.Register(() => lost.TrySetResult());
-            }, default, publish: () => published = true);
+            }, default, publish: () => published = true, sourceFingerprint: new byte[32]);
         await lost.Task.WaitAsync(TimeSpan.FromSeconds(20));
         await tx.RollbackAsync(); // Same epoch and an unexpired database lease, but no local proof.
         Assert.Equal(HostedImport.Fenced, await run.WaitAsync(TimeSpan.FromSeconds(15)));
@@ -46,7 +46,7 @@ public sealed partial class HostedImportTests
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
         var lease = new TenantLease(db.OpenOwner(), PostgresServer.Tenant, 2);
-        var grant = (await lease.TryAcquireForImportAsync("import:clock", 0, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(1), default))!;
+        var grant = (await lease.TryAcquireForImportAsync("import:clock", 0, TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(1), default, sourceFingerprint: new byte[32]))!;
         await db.ExecuteOwnerAsync("UPDATE tenant_leases SET expires_at=clock_timestamp()+interval '2 seconds'");
         await using var blocker = new NpgsqlConnection(db.OwnerConnectionString);
         await blocker.OpenAsync();
@@ -78,7 +78,7 @@ public sealed partial class HostedImportTests
             {
                 Directory.Move(stage.FullName, published);
                 proxy.HoldExisting(toServer: false, toClient: true);
-            });
+            }, sourceFingerprint: new byte[32]);
         Assert.Equal(HostedImport.Failed, result);
         Assert.Equal("active", await TenantStateAsync(db, PostgresServer.Tenant));
         Assert.True(Directory.Exists(published));

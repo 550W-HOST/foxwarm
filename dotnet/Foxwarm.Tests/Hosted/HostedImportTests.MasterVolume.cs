@@ -72,7 +72,7 @@ public sealed partial class HostedImportTests
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
         await db.ExecuteOwnerAsync("UPDATE tenants SET state='importing', profile='operator', pinned_role='master-host'");
-        var code = await HostedImport.AbandonOperatorAsync(db.OpenApp(), db.OpenOwner(), PostgresServer.Tenant,
+        var code = await HostedImport.AbandonAsync(db.OpenApp(), db.OpenOwner(), PostgresServer.Tenant, TenantProfile.Operator,
             Path.Combine(temp.Path, "absent"), Path.Combine(Reports,"abandon.json"), new StringWriter());
         Assert.Equal(HostedImport.Refused, code);
         Assert.Equal("importing", await TenantStateAsync(db, PostgresServer.Tenant));
