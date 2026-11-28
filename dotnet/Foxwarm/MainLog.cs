@@ -12,7 +12,7 @@ namespace Foxwarm;
 // The Console capture is one per process: the first MainLog installs it and the last one to
 // be disposed removes it. Each MainLog is a sink (a log file, the secrets that mask its lines
 // and, in hosted mode, its tenant). A line goes to the sink of the current logical flow
-// (UseFor), else to the oldest open sink. Several runtimes in one process therefore share
+// (UseFor), else to the process. Several runtimes in one process therefore share
 // one capture instead of wrapping each other's.
 internal sealed class MainLog : IDisposable
 {
@@ -104,9 +104,9 @@ internal sealed class MainLog : IDisposable
         return error.InnerException is { } inner ? detail + " / " + SafeFailure(inner) : detail;
     }
 
-    internal static string Destination(ModelConfiguration? configuration, string? dataRoot = null)
+    internal static string Destination(ModelConfiguration? configuration, string? dataRoot = null, bool hosted = false)
     {
-        var name = configuration?.AppConfiguration["bot"]?["name"]?.ToString();
+        var name = hosted ? null : configuration?.AppConfiguration["bot"]?["name"]?.ToString();
         return Path.Join(
             configuration?.Paths.DataRoot ?? dataRoot!,
             "state",
@@ -116,7 +116,7 @@ internal sealed class MainLog : IDisposable
     }
 
     internal MainLog(ModelConfiguration configuration, bool jsonStdout = false, string? tenant = null)
-        : this(Destination(configuration), configuration.Secrets, jsonStdout, tenant) { }
+        : this(Destination(configuration, hosted: tenant is not null), configuration.Secrets, jsonStdout, tenant) { }
 
     /// <summary>
     /// Opens a sink writing to <paramref name="destination"/>. The first open sink of the process
@@ -160,7 +160,7 @@ internal sealed class MainLog : IDisposable
 
     /// <summary>
     /// Makes this sink the destination of the Console lines that the current logical flow, and
-    /// the work it starts, writes from now on. Without one, a line goes to the oldest open sink,
+    /// the work it starts, writes from now on. Without one, a line goes to the process,
     /// and it's masked with the secrets of every open sink.
     /// </summary>
     internal void UseFor() => current.Value = this;
@@ -341,9 +341,9 @@ internal sealed class MainLog : IDisposable
         internal void Remove(MainLog sink) => sinks.Remove(sink);
 
         // The current flow's sink, if it is one of this capture's open sinks.
-        // The process's own sink: the oldest open sink without a tenant, else the oldest one.
+        // A process file sink is optional; unscoped hosted diagnostics still reach stdout.
         private MainLog? Process() =>
-            sinks.FirstOrDefault(sink => sink.tenant is null) ?? (sinks.Count > 0 ? sinks[0] : null);
+            sinks.FirstOrDefault(sink => sink.tenant is null);
 
         internal MainLog? Scoped() =>
             current.Value is { disposed: false } sink && ReferenceEquals(sink.capture, this)
@@ -370,7 +370,7 @@ internal sealed class MainLog : IDisposable
         }
 
         // A line goes to the sink that wrote it, else (no known sink, or that sink has closed)
-        // to the oldest open sink: the replica's own log in hosted mode.
+        // to the process log, never another tenant's file.
         internal void Record(string line, bool isError, MainLog? source)
         {
             if (closed)

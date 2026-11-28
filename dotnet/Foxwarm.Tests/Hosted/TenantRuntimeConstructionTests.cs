@@ -41,7 +41,8 @@ public sealed partial class TenantRuntimeConstructionTests
             string slug,
             (int Id, long Epoch) lease,
             DeploymentConfiguration deployment,
-            TenantProfile profile = TenantProfile.Hosted
+            TenantProfile profile = TenantProfile.Hosted,
+            TenantServer? server = null
         )
         {
             var grant = new LeaseGrant(lease.Id, slug, "replica-a/0001", lease.Epoch) { Profile = profile };
@@ -52,7 +53,7 @@ public sealed partial class TenantRuntimeConstructionTests
                 null,
                 new GenerationFence()
             );
-            var server = new TenantServer(deployment.TenantOrigin(slug));
+            server ??= new TenantServer(deployment.TenantOrigin(slug));
             return HostedEntry.CreateTenantRuntimeAsync(
                 new TenantRuntimeContext(activation, new TenantDb(App, lease.Id, lease.Epoch), server),
                 profile == TenantProfile.Operator

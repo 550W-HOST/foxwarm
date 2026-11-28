@@ -21,6 +21,7 @@ internal sealed class MainHost : IAsyncDisposable
         host.Services.GetRequiredService<IHostApplicationLifetime>();
     internal bool HttpEnabled => host is WebApplication;
     internal SessionManager Sessions => sessions;
+    internal MainLog? Log => log;
 
     /// <summary>Main-local Sessions with a running turn (the Desktop's stop confirmation).</summary>
     internal int RunningSessionCount() =>

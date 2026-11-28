@@ -168,7 +168,7 @@ public sealed partial class TenantReplicaTests
         return await StartReplicaAsync(database, "replica-a", System.Security.Cryptography.RandomNumberGenerator.GetBytes(32), ownsDatabase: true, timings: timings);
     }
 
-    private static async Task<Fixture> StartReplicaAsync(HostedTestDatabase database, string name, byte[] key, bool ownsDatabase = false, LeaseTimings? timings = null)
+    private static async Task<Fixture> StartReplicaAsync(HostedTestDatabase database, string name, byte[] key, bool ownsDatabase = false, LeaseTimings? timings = null, string? scratchRoot = null)
     {
         timings ??= Fast;
         var fixture = new Fixture { Database = database, Stop = new CancellationTokenSource(), MeshKey = key, OwnsDatabase = ownsDatabase };
@@ -184,6 +184,7 @@ public sealed partial class TenantReplicaTests
                 ReaderVersion: 2
             )
             {
+                ScratchRoot = scratchRoot,
                 ShutdownBound = TimeSpan.FromSeconds(5),
                 MoveGrace = TimeSpan.FromMilliseconds(250),
                 Mesh = new(new(IPAddress.Loopback, 0), "127.0.0.1", key),

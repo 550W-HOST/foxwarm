@@ -60,6 +60,8 @@ internal sealed class TenantServer : IServer
         Features.Set<IServerAddressesFeature>(addresses);
     }
 
+    internal MainLog? Log { private get; set; }
+
     public IFeatureCollection Features { get; } = new FeatureCollection();
 
     /// <summary>The tenant's application has started and isn't stopping.</summary>
@@ -115,9 +117,10 @@ internal sealed class TenantServer : IServer
     }
 
     // ASP.NET's own hosting contract: one context per request, disposed with the outcome.
-    private static async Task RunAsync<TContext>(IHttpApplication<TContext> app, IFeatureCollection features)
+    private async Task RunAsync<TContext>(IHttpApplication<TContext> app, IFeatureCollection features)
         where TContext : notnull
     {
+        Log?.UseFor();
         var context = app.CreateContext(features);
         Exception? failure = null;
         try

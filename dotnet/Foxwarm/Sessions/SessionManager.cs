@@ -83,6 +83,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     // Session stores are.
     internal IAgentStore? AgentStore => Capabilities.MasterNode ? null : Storage.AgentFiles;
 
+    internal Channels.WebUi.HostedUploadStaging? UploadStaging { get; }
+
     internal AgentCatalog AgentCatalog => agents;
 
     public SessionManager(
@@ -140,6 +142,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (Capabilities.Limits is not null)
             ToolScript.AdmitProcess = token => Admission!.ToolScripts.EnterAsync(token);
         this.root = Path.GetFullPath(root);
+        if (Capabilities.Limits is not null)
+            UploadStaging = new(this.root, ReceivedFileLimit);
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
         if (Directory.Exists(runtimeFiles))
             Directory.Delete(runtimeFiles, recursive: true);
@@ -1199,6 +1203,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await Browser.DisposeAsync();
         await mcp.DisposeAsync();
         await NodeProviders.DisposeAsync();
+        UploadStaging?.Dispose();
         Nodes.Dispose();
         await websockets.DisposeAsync();
         await Usage.DisposeAsync();

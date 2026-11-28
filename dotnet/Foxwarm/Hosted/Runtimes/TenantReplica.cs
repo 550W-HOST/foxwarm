@@ -53,6 +53,8 @@ internal sealed record TenantReplicaOptions(
 
     internal string? OperatorHostname { get; init; }
 
+    internal string? ScratchRoot { get; init; }
+
     /// <summary>Transactions in flight per tenant (<see cref="TenantDb"/>'s statement cap).</summary>
     internal int MaxInFlight { get; init; } = 8;
 }
@@ -335,7 +337,11 @@ internal sealed class TenantReplica
     {
         using var ticks = new PeriodicTimer(HostnameDirectory.Lifetime);
         while (await ticks.WaitForNextTickAsync(token).ConfigureAwait(false))
-            try { await directory.RefreshAsync(token).ConfigureAwait(false); }
+            try
+            {
+                await directory.RefreshAsync(token).ConfigureAwait(false);
+                if (options.ScratchRoot is not null) CheckPlacement();
+            }
             catch (Exception error) when (!token.IsCancellationRequested)
             {
                 log("[hosted] Hostname refresh failed: " + error.GetType().Name);
@@ -490,14 +496,15 @@ internal sealed class TenantReplica
     private async Task RetireMisplacedAsync(TenantActivations coordinator)
     {
         var held = coordinator.Grants();
-        if (held.Count == 0)
+        var scratch = LocalScratchDirectories();
+        if (held.Count == 0 && scratch.Count == 0)
             return;
         await using var connection = await app.OpenAsync(CancellationToken.None).ConfigureAwait(false);
         await using var command = new Npgsql.NpgsqlCommand(
             "SELECT tenant_id, profile, pinned_role, settings_revision, credential_version, state FROM tenants WHERE tenant_id = ANY($1)",
             connection
         );
-        command.Parameters.Add(new Npgsql.NpgsqlParameter<int[]> { TypedValue = [.. held.Select(grant => grant.TenantId).Distinct()] });
+        command.Parameters.Add(new Npgsql.NpgsqlParameter<int[]> { TypedValue = [.. held.Select(grant => grant.TenantId).Concat(scratch.Keys).Distinct()] });
         Dictionary<int, (TenantProfile Profile, string? Pinned, long Revision, long Credential, string State)> placement = [];
         await using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
             while (await reader.ReadAsync().ConfigureAwait(false))
@@ -506,6 +513,31 @@ internal sealed class TenantReplica
             if (placement.TryGetValue(grant.TenantId, out var now)
                 && (now.State != "active" || now.Revision != grant.SettingsRevision || now.Profile != grant.Profile || !ReplicaRoles.MayServe(options.Role, now.Profile, now.Pinned)))
                 coordinator.SettingsChanged(grant, now.Credential != grant.CredentialVersion);
+        // A tenant ID is never reused. Only a committed terminal state or a missing row
+        // permits erasure; suspend, move, and failed lookup leave the directory untouched.
+        // A building or retiring generation may still write until disposal returns.
+        foreach (var (id, directory) in scratch)
+        {
+            if (placement.TryGetValue(id, out var tenant) && tenant.State != "deleting") continue;
+            if (coordinator.UsesScratch(id)) continue;
+            Directory.Delete(directory, recursive: true);
+        }
+
+    }
+
+    private Dictionary<int, string> LocalScratchDirectories()
+    {
+        Dictionary<int, string> result = [];
+        if (options.ScratchRoot is null) return result;
+        var root = Path.Combine(options.ScratchRoot, "t");
+        if (!Directory.Exists(root)) return result;
+        foreach (var directory in Directory.EnumerateDirectories(root))
+        {
+            var name = Path.GetFileName(directory);
+            if (int.TryParse(name, out var id) && id > 0 && name == id.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                result[id] = directory;
+        }
+        return result;
     }
 
     private void InvalidateOperatorDocuments()

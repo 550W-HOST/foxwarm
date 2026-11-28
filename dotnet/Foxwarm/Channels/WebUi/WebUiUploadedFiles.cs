@@ -31,8 +31,14 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
 
     internal string TooLarge => $"This file is larger than the {Foxwarm.Limits.TenantLimits.Size(UploadLimit)} upload limit.";
     internal static string StagingRoot => Path.Combine(Path.GetTempPath(), "foxwarm-uploads");
-    internal string Root => sessions.Capabilities.MasterNode ? StagingRoot : Path.Combine(sessions.DataRoot, "foxwarm-uploads");
+    internal string Root => sessions.UploadStaging?.Root ?? StagingRoot;
     internal Func<SessionOwner, string, Task>? BeforeStage { get; set; }
+
+    internal void DeleteStaged(string path)
+    {
+        if (sessions.UploadStaging is { } staging) staging.Delete(path);
+        else File.Delete(path);
+    }
 
     internal static string Mime(string? declared, string filename)
     {
@@ -96,6 +102,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     ? SessionGoal.Trim(suppliedName!)
                     : Path.GetFileName(path);
                 var mime = Mime(SessionWait.Text((entry as JsonObject)?["mimeType"]), filename);
+                using var pin = sessions.UploadStaging?.PinRead(path);
                 await using var source = OpenStaged(path);
                 var isImage = ImageInputPolicy.IsImageInput(mime);
                 // Without a master Node and an Agent store no tool reads the Agent directory, so
@@ -137,7 +144,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     parts.Add(await InlineImageAsync(bytes, mime, source.Length, token));
                     scoped?.ConsumeUpload(path);
                     await source.DisposeAsync();
-                    File.Delete(path);
+                    DeleteStaged(path);
                     continue;
                 }
                 await StageAsync(owner, "before-copy");
@@ -225,7 +232,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 scoped?.ConsumeUpload(path);
                 // Administrator callers may still use other existing staging files.
                 await source.DisposeAsync();
-                File.Delete(path);
+                DeleteStaged(path);
             }
             return new(parts, saved);
         }

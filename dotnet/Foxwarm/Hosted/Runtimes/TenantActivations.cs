@@ -192,6 +192,13 @@ internal sealed class TenantActivations : IAsyncDisposable
             return [.. slots.Values.Select(slot => slot.Current).OfType<TenantGeneration>()];
     }
 
+    internal bool UsesScratch(int tenantId)
+    {
+        lock (gate)
+            return slots.Values.Any(slot => slot.Grant?.Grant.TenantId == tenantId ||
+                slot.Building?.Id.TenantId == tenantId || slot.Current?.Id.TenantId == tenantId || slot.Retiring?.Id.TenantId == tenantId);
+    }
+
     internal IReadOnlyList<LeaseGrant> Grants()
     {
         lock (gate)
