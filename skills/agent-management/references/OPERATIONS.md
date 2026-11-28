@@ -38,12 +38,12 @@ A Session works from a prompt snapshot assembled from:
 ## Where knowledge belongs
 
 1. **Framework prompt:** rules for every Agent. Keep it small and generic.
-2. **Agent memory:** what every Session of the Agent needs: stable rules, user preferences, environment facts, confirmed decisions and short pointers.
+2. **Agent memory:** what every Session of the Agent needs: stable rules, user preferences, environment facts, confirmed decisions that bind work beyond the task they came from, and short pointers.
 3. **Agent docs:** analysis, runbooks, history and deliverables, read when needed.
 4. **Skills:** reusable procedures. Only the catalog entry is visible until the skill is loaded.
 5. **Skill resources:** references, scripts and examples inside a skill directory, read only when the skill or task needs them.
 
-Judge by relevance and reading cost, not line count. Session history, its summaries and `recall` already preserve progress, so memory is not a progress log. A directory containing `SKILL.md` is one skill; nested `SKILL.md` files inside its resources are not separate catalog entries.
+Judge by relevance and reading cost, not line count. Session history, its summaries and `recall` already preserve progress, so memory is not a progress log or a status board. The state of ongoing work (phases, approvals, branches, review results, owners) and decisions that only shape that work stay with the Session doing it and in the work's docs or Tasks. A directory containing `SKILL.md` is one skill; nested `SKILL.md` files inside its resources are not separate catalog entries.
 
 ### Framework prompt files
 
