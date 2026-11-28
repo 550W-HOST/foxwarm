@@ -66,11 +66,15 @@ public sealed partial class ProviderTenancyTests
         deployment.Root["nodeProviders"]!["child"]!["parentNode"] = "ungranted/anchor";
         await using var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
         var slug = PostgresServer.Tenant;
-        if (master) await db.ExecuteOwnerAsync("UPDATE tenants SET profile='operator'");
+        if (master) await db.ExecuteOwnerAsync("UPDATE tenants SET profile='operator', pinned_role='master-host'");
         await db.ExecuteOwnerAsync("INSERT INTO provider_grants(tenant_id,provider_id) SELECT tenant_id,id FROM tenants CROSS JOIN unnest(ARRAY['extended','broken','mismatch','duplicate','child']) id");
         var key = Path.Combine(temp.Path,"kek","current.key");
         _ = InstanceKeys.OpenOrCreate(key);
-        var boot = new HostedBootstrap(null,null,slug,PostgresServer.AppRole,ScratchRoot:Path.Combine(temp.Path,"scratch"),KekFile:key);
+        var boot = new HostedBootstrap(null,null,slug,PostgresServer.AppRole,ScratchRoot:Path.Combine(temp.Path,"scratch"),KekFile:key)
+        {
+            Role = master ? ReplicaRoles.MasterHost : ReplicaRoles.General,
+            AgentsVolume = master ? Directory.CreateDirectory(Path.Combine(temp.Path,"operator-agents")).FullName : null,
+        };
         var timings = new LeaseTimings(TimeSpan.FromSeconds(15),TimeSpan.FromSeconds(1),TimeSpan.FromSeconds(5));
         using var stop = new CancellationTokenSource();
         MainHostRuntime current = null!;

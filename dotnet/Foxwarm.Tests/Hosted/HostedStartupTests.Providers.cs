@@ -15,7 +15,7 @@ public sealed partial class HostedStartupTests
         var files = HostedFiles.Create(temp.Path);
         var definitions = ProviderTenancyTests.Deployment(temp.Path, ("extended", "extended", true), ("old", "legacy", false));
         await using var database = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
-        if (master) await database.ExecuteOwnerAsync("UPDATE tenants SET profile='operator'");
+        if (master) await database.ExecuteOwnerAsync("UPDATE tenants SET profile='operator', pinned_role='master-host'");
         await database.ExecuteOwnerAsync("INSERT INTO provider_grants(tenant_id,provider_id,quotas) SELECT tenant_id,'extended','{\"nodes\":0}' FROM tenants");
         var replica = StartHosted(database.OpenApp(), files, deploymentExtra: "nodeProviders: " + definitions.Root["nodeProviders"]!.ToJsonString(),
             role: master ? ReplicaRoles.MasterHost : ReplicaRoles.General);

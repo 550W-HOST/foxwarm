@@ -27,7 +27,7 @@ public sealed partial class WakeupLifecycleTests
         {
             var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
             await db.ExecuteOwnerAsync("INSERT INTO tenant_hostnames(hostname,tenant_id,kind) SELECT name || '.test',tenant_id,'primary' FROM tenants ON CONFLICT DO NOTHING");
-            if (master) await db.ExecuteOwnerAsync("UPDATE tenants SET profile='operator'");
+            if (master) await db.ExecuteOwnerAsync("UPDATE tenants SET profile='operator', pinned_role='master-host'");
             var config = DeploymentConfiguration.Parse("url: 'http://{slug}.test'\nblobs: {backend: postgres}\nhealth: {port: 3081}\n");
             LiveReplica live = null!;
             HostedBootstrap bootstrap = null!;
@@ -45,7 +45,11 @@ public sealed partial class WakeupLifecycleTests
             live = new LiveReplica { Db=db, Replica=replica };
             var kek = Path.Combine(live.Temp.Path,"kek","current.key");
             _ = InstanceKeys.OpenOrCreate(kek);
-            bootstrap = new(null,null,PostgresServer.Tenant,PostgresServer.AppRole,ScratchRoot:Path.Combine(live.Temp.Path,"scratch"),KekFile:kek);
+            bootstrap = new(null,null,PostgresServer.Tenant,PostgresServer.AppRole,ScratchRoot:Path.Combine(live.Temp.Path,"scratch"),KekFile:kek)
+            {
+                Role = master ? ReplicaRoles.MasterHost : ReplicaRoles.General,
+                AgentsVolume = master ? Directory.CreateDirectory(Path.Combine(live.Temp.Path,"operator-agents")).FullName : null,
+            };
             live.serving = replica.RunAsync(live.Stop.Token);
             await replica.Serving.WaitAsync(TimeSpan.FromSeconds(12));
             return live;

@@ -13,14 +13,15 @@ public sealed partial class WakeupScanTests
         await using var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
         await db.RegisterBootsAsync("scanner/boot", "old/boot", "current/boot");
         await db.ExecuteOwnerAsync("""
-            INSERT INTO tenants(name, pinned_role) SELECT 'pinned-' || n, 'master-host' FROM generate_series(1,80) n;
+            INSERT INTO tenants(name,profile,pinned_role) VALUES ('operator','operator','master-host');
+            INSERT INTO tenants(name,min_reader_version) SELECT 'newer-' || n, 3 FROM generate_series(1,80) n;
             INSERT INTO tenants(name) VALUES ('due'),('recover'),('clean'),('backoff'),('live'),('future'),('soon'),('suspended'),('deleting');
-            INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM tenants WHERE name LIKE 'pinned-%' OR name IN ('due','recover','clean','backoff','live','future','soon','suspended','deleting');
+            INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM tenants WHERE name LIKE 'newer-%' OR name='operator' OR name IN ('due','recover','clean','backoff','live','future','soon','suspended','deleting');
             INSERT INTO tenant_wakeups(tenant_id, due_at)
-                SELECT tenant_id, CASE WHEN name LIKE 'pinned-%' THEN now() - interval '1 hour'
+                SELECT tenant_id, CASE WHEN name LIKE 'newer-%' OR name='operator' THEN now() - interval '1 hour'
                                        WHEN name = 'soon' THEN now()+interval '5 seconds'
                                        WHEN name = 'future' THEN now()+interval '1 hour' ELSE now()-interval '20 seconds' END
-                FROM tenants WHERE name LIKE 'pinned-%' OR name IN ('due','live','backoff','future','soon','suspended','deleting');
+                FROM tenants WHERE name LIKE 'newer-%' OR name='operator' OR name IN ('due','live','backoff','future','soon','suspended','deleting');
             UPDATE tenants SET state=name WHERE name IN ('suspended','deleting');
             UPDATE tenant_wakeups SET next_attempt_at=now()+interval '1 hour' WHERE tenant_id=(SELECT tenant_id FROM tenants WHERE name='backoff');
             UPDATE tenant_leases SET state='active',expires_at=now()-interval '20 seconds',owner_replica='old/boot' WHERE tenant_id=(SELECT tenant_id FROM tenants WHERE name='recover');

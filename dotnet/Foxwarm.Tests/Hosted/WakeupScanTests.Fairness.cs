@@ -14,7 +14,7 @@ public sealed partial class WakeupScanTests
         await db.ExecuteOwnerAsync("""
             UPDATE replicas SET role='master-host' WHERE replica_id='master/live';
             INSERT INTO tenants(name) SELECT 'general-' || n FROM generate_series(1,80) n;
-            INSERT INTO tenants(name,profile) VALUES ('scheduled-operator','operator');
+            INSERT INTO tenants(name,profile,pinned_role) VALUES ('scheduled-operator','operator','master-host');
             INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM tenants WHERE name LIKE 'general-%' OR name='scheduled-operator';
             INSERT INTO tenant_wakeups(tenant_id,due_at) SELECT tenant_id, now()-CASE WHEN name LIKE 'general-%' THEN interval '2 hours' ELSE interval '1 hour' END FROM tenants;
             """);

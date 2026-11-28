@@ -7,6 +7,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Tests.Hosted;
 
+[Trait("Backend", "postgres")]
 public sealed partial class ProviderTenancyTests
 {
     internal static DeploymentConfiguration Deployment(string root, params (string Id,string Mode,bool Declared)[] providers)
