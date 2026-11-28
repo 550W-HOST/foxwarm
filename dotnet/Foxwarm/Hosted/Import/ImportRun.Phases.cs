@@ -50,7 +50,7 @@ internal sealed partial class ImportRun
 
     // ---- Plan ----
 
-    private JsonObject Plan()
+    private JsonObject Plan(long agentFileLimit)
     {
         long Rows(string file, ImportTable table) => Copy(file) is { } connection ? ImportTables.CountRows(connection, table) : 0;
         var documents = source.SessionDocuments().Count();
@@ -60,7 +60,7 @@ internal sealed partial class ImportRun
         if (options.Profile == TenantProfile.Operator)
             physicalFolders = PhysicalAgentImport.Scan(root, required, options.AgentsVolume, source.Root, report);
         else
-            agentFolders = AgentFolderImport.Scan(root, AgentStoreLimits.Default.FileBytes, report, required);
+            agentFolders = AgentFolderImport.Scan(root, agentFileLimit, report, required);
         var plan = new JsonObject
         {
             ["agentFiles"] = physicalFolders?.FileCount ?? agentFolders!.FileCount,

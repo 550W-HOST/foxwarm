@@ -25,9 +25,9 @@ internal static class HostedAgentImport
         try
         {
             await SchemaMigrator.RequireCompatibleAsync(app, token: token);
-            var expectedEpoch = new TenantDb(owner, 0, 0).Read(tx =>
+            var (tenantId, expectedEpoch) = new TenantDb(owner, 0, 0).Read(tx =>
             {
-                using var command = tx.Command("SELECT t.state, t.profile, l.epoch, (l.state = 'released' OR l.expires_at <= now())"
+                using var command = tx.Command("SELECT t.state, t.profile, l.epoch, (l.state = 'released' OR l.expires_at <= now()), t.tenant_id"
                     + " FROM tenants t JOIN tenant_leases l USING (tenant_id) WHERE t.name = $1", tenant);
                 using var reader = command.ExecuteReader();
                 if (!reader.Read())
@@ -41,11 +41,13 @@ internal static class HostedAgentImport
                     throw new ImportRefusedException($"Tenant {tenant} is {state}; " + (abandon ? "only an incomplete Agent-only import can be abandoned." : "stop an active tenant or retry its incomplete Agent-only import."));
                 if (!reader.GetBoolean(3))
                     throw new ImportRefusedException("The tenant lease is held. Stop the tenant before importing Agent files.");
-                return reader.GetInt64(2);
+                return (reader.GetInt32(4), reader.GetInt64(2));
             });
             if (!abandon && (!Directory.Exists(from!) || new DirectoryInfo(from!).LinkTarget is not null))
                 throw new ImportRefusedException("The source must be an existing, ordinary Agents directory: " + from);
-            var plan = abandon ? null : AgentFolderImport.Scan(from!, AgentStoreLimits.Default.FileBytes, report, required: true);
+            var plan = abandon ? null : AgentFolderImport.Scan(from!,
+                (await TenantPolicy.ReadAsync(new TenantDb(app, tenantId, 0), token)).Limits.AgentStore.FileBytes,
+                report, required: true);
             exit = await LeasedImport.RunAsync(app, owner, tenant, expectedEpoch, abandon ? ImportKind.AbandonAgents : ImportKind.Agents,
                 LeaseTimings.Default, blobs, work, report, async (storage, _, ct) =>
                 {
@@ -65,7 +67,7 @@ internal static class HostedAgentImport
                         await report.PhaseAsync("agent files", () => plan!.WriteAsync(store, ct), count => count);
                         await report.PhaseAsync("verify Agent files", () => plan!.VerifyAsync(store, report, ct), count => count);
                     }
-                }, token, plan?.Summary().ToJsonString());
+                }, token, plan?.Summary().ToJsonString(), writesAgentBlobs: plan?.WritesBlobs == true);
             if (abandon && exit == HostedImport.Imported)
                 report.Outcome = "abandoned";
         }

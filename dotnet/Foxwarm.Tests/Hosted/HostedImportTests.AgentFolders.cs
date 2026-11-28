@@ -9,6 +9,25 @@ namespace Foxwarm.Tests.Hosted;
 public sealed partial class HostedImportTests
 {
     [Fact]
+    public async Task Target_file_limit_governs_the_dry_run_and_actual_Agent_inventory()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var db = await server.CreateDatabaseAsync();
+        await db.ExecuteOwnerAsync("UPDATE tenants SET limits=jsonb_build_object('agentFileBytes',32)");
+        var root = Directory.CreateDirectory(Path.Combine(temp.Path, "agents")).FullName;
+        await File.WriteAllBytesAsync(Path.Combine(root, "accepted"), new byte[32]);
+        await File.WriteAllBytesAsync(Path.Combine(root, "skipped"), new byte[33]);
+        foreach (var dryRun in new[] { true, false })
+        {
+            var result = await RunAsync(db, fixture.DataRoot, PostgresServer.Tenant, Reports, options => options with { AgentsDirectory = root }, dryRun: dryRun);
+            Assert.True(result.Exit == 0, result.Report.ToJsonString());
+            Assert.Equal(1, result.Report["plan"]!["agentFiles"]!.GetValue<int>());
+            Assert.Contains(result.Report["notImported"]!.AsArray(), e => e!["what"]!.ToString() == "agents/skipped");
+        }
+        Assert.Equal("accepted", await db.ScalarAsync("SELECT path FROM agent_files WHERE kind='file'"));
+    }
+
+    [Fact]
     public async Task Configured_Agent_root_supplies_non_main_memory()
     {
         var server = await PostgresServer.SharedAsync();

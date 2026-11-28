@@ -209,9 +209,14 @@ internal sealed partial class ImportRun : IAsyncDisposable
         }, count => count);
         CheckSourceContent();
         report.Phase("configuration split", () => config = SplitConfiguration(), _ => config?.Blocks.Count ?? 0);
-        var plan = report.Phase("plan", Plan, items => items.Count);
-        report.Root["plan"] = plan;
         var target = await InspectTargetAsync().ConfigureAwait(false);
+        var fileBytes = target.Id is { } id && options.Profile == TenantProfile.Hosted && report.Refusals.Count == 0
+            ? (await TenantPolicy.ReadAsync(new TenantDb(databases.App, id, 0), stop)).Limits.AgentStore.FileBytes
+            : AgentStoreLimits.Default.FileBytes;
+        var plan = report.Phase("plan", () => Plan(fileBytes), items => items.Count);
+        report.Root["plan"] = plan;
+        if (report.Refusals.Count == 0 && target.Id is { } existing)
+            physicalFolders?.RequireEmptyDestination(existing);
         if (report.Refusals.Count > 0)
         {
             report.Outcome = "refused";
@@ -223,7 +228,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
             report.Outcome = "dry-run";
             return HostedImport.Imported;
         }
-        var exit = await ImportAsync(target).ConfigureAwait(false);
+        var exit = await ImportAsync(target.Epoch).ConfigureAwait(false);
         if (exit == HostedImport.Imported)
             physicalFolders?.ReportPublishedLinks();
         return exit;
@@ -239,7 +244,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
             Token = token;
             await WriteAsync();
             await VerifyAsync();
-        }, stop, profile: options.Profile, publish: () => physicalFolders?.Publish());
+        }, stop, profile: options.Profile, publish: () => physicalFolders?.Publish(), writesAgentBlobs: agentFolders?.WritesBlobs == true);
 
     // ---- Preflight (design §8.1 step 1) ----
 
@@ -424,7 +429,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
 
     // The tenant must be new, or exist without any rows (`db migrate` creates the configured
     // tenant). Returns the epoch to expect at acquisition, null for a new tenant.
-    private async Task<long?> InspectTargetAsync()
+    private async Task<(int? Id, long? Epoch)> InspectTargetAsync()
     {
         try
         {
@@ -433,7 +438,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
         catch (SchemaIncompatibleException error)
         {
             report.Refuse("The hosted schema isn't compatible with this build: " + error.Message);
-            return null;
+            return default;
         }
         var probe = new TenantDb(databases.App, 0, 0);
         var id = probe.Read(tx => tx.Scalar("SELECT tenant_id FROM tenants WHERE name = $1", options.Tenant) as int?);
@@ -445,7 +450,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
         if (id is null)
         {
             report.Root["tenant"]!["existed"] = false;
-            return null;
+            return default;
         }
         report.Root["tenant"]!["existed"] = true;
         var tenant = new TenantDb(databases.App, id.Value, 0);
@@ -504,9 +509,7 @@ internal sealed partial class ImportRun : IAsyncDisposable
             report.Refuse($"Tenant {options.Tenant}'s lease is held by {owner}. Stop its replicas before importing.");
         else if (state is not ("active" or "importing"))
             report.Refuse($"Tenant {options.Tenant} is {state}; an import needs a new or empty tenant.");
-        else if (options.Profile == TenantProfile.Operator)
-            physicalFolders!.RequireEmptyDestination(id.Value);
-        return epoch;
+        return (id, epoch);
     }
 
     public async ValueTask DisposeAsync()

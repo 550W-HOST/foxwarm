@@ -12,6 +12,23 @@ public sealed class HostedAgentImportTests
     // Optional offline volume from a stopped installation, checked without requiring its
     // separate installation state, keys or SQLite files.
     [Fact]
+    public async Task Agent_only_import_enforces_the_existing_tenant_quota()
+    {
+        var server = await PostgresServer.SharedAsync();
+        await using var db = await server.CreateDatabaseAsync();
+        var size = Foxwarm.Hosted.Postgres.PgAgentFileStore.InlineBytes + 1;
+        await db.ExecuteOwnerAsync("UPDATE tenants SET limits=jsonb_build_object('agentStoreBytes'," + (size - 1) + ")");
+        using var tmp = new TempDirectory();
+        var root = Directory.CreateDirectory(Path.Combine(tmp.Path, "agents")).FullName;
+        await File.WriteAllBytesAsync(Path.Combine(root, "large"), new byte[size]);
+        var report = Path.Combine(tmp.Path, "report.json");
+        var result = await HostedAgentImport.RunAsync(db.OpenApp(), db.OpenOwner(), PostgresServer.Tenant, root, false, report, null, new StringWriter());
+        Assert.Equal(HostedImport.Failed, result);
+        Assert.Contains("Agent files are full", JsonNode.Parse(await File.ReadAllTextAsync(report))!["error"]!.ToString());
+        Assert.Equal(0L, await db.ScalarAsync("SELECT count(*) FROM agent_blob_reservations"));
+    }
+
+    [Fact]
     public async Task A_real_Agents_volume_is_verified_file_by_file()
     {
         if (Environment.GetEnvironmentVariable("FOXWARM_AGENT_IMPORT_GOLDEN") is not { Length: > 0 } root)
