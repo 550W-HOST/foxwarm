@@ -47,6 +47,11 @@ for (byte i = 0; i < cases.Length; i++)
     await CheckParentAndWorker();
     Console.WriteLine("contained: " + cases[i].Name);
 }
+
+// Exercise independent cold starts. NativeAOT initializes its finalizer thread asynchronously;
+// installing TSYNC before it is ready can intermittently kill legitimate conversions.
+for (int i = 0; i < 64; i++)
+    await worker.RunAsync(DecodeOperation.Optimize, gif, "image/gif");
 var variant = await worker.RunAsync(DecodeOperation.Optimize, gif, "image/gif");
 var crop = await worker.RunAsync(
     DecodeOperation.Crop,

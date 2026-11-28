@@ -51,7 +51,7 @@ public sealed class VisionInputParityTests
             var bytes = await File.ReadAllBytesAsync(Path.Combine(temp.Path, name + ".png"));
             Assert.Equal(
                 row["oversized"]!.GetValue<bool>(),
-                ImageInputPolicy.IsOversized(bytes, "image/png")
+                await ImageInputPolicy.IsOversizedAsync(blobs.Decoder, bytes, "image/png")
             );
             var reference = await blobs.PutAsync(bytes, "image/png", name);
             Assert.Equal(
@@ -66,13 +66,13 @@ public sealed class VisionInputParityTests
                 Path.Combine(temp.Path, row!["name"]!.ToString() + ".tif")
             );
             if (row["invalid"]?.GetValue<bool>() == true)
-                Assert.Throws<ImageInputException>(() =>
-                    ImageInputPolicy.IsOversized(bytes, "image/tiff")
+                await Assert.ThrowsAsync<ImageInputException>(() =>
+                    ImageInputPolicy.IsOversizedAsync(blobs.Decoder, bytes, "image/tiff")
                 );
             else
                 Assert.Equal(
                     row["oversized"]!.GetValue<bool>(),
-                    ImageInputPolicy.IsOversized(bytes, "image/tiff")
+                    await ImageInputPolicy.IsOversizedAsync(blobs.Decoder, bytes, "image/tiff")
                 );
         }
         var tiffOptions = new ResponsesClientOptions(
@@ -235,7 +235,7 @@ public sealed class VisionInputParityTests
         using var temp = new TempDirectory();
         var blobs = new ImageBlobStore(temp.Path);
         var bytes = new byte[ImageInputPolicy.MaxBytes + 1];
-        Assert.True(ImageInputPolicy.IsOversized(bytes, "image/heic"));
+        Assert.True(await ImageInputPolicy.IsOversizedAsync(blobs.Decoder, bytes, "image/heic"));
         var reference = await blobs.PutAsync(bytes, "image/heic", "retained-heif");
         var message = new JsonObject
         {

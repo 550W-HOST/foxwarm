@@ -8,10 +8,13 @@ namespace Foxwarm.Images;
 
 internal sealed partial class ImageBlobStore(
     string dataRoot,
-    Foxwarm.Storage.IBlobStore? blobs = null
+    Foxwarm.Storage.IBlobStore? blobs = null,
+    TenantImageDecoder? decoder = null
 )
 {
     internal string DataRoot { get; } = Path.GetFullPath(dataRoot);
+
+    internal TenantImageDecoder Decoder { get; } = decoder ?? TenantImageDecoder.Local;
 
     // Content-addressed originals; the provider variant cache below DataRoot stays a local,
     // disposable per-process cache.
@@ -95,7 +98,7 @@ internal sealed partial class ImageBlobStore(
     {
         mime = mime.Trim().ToLowerInvariant();
         RasterCodec.Probe? probe = RasterCodec.IsSafeRaster(mime)
-            ? RasterCodec.Inspect(bytes, mime, enforcePixelLimit: false)
+            ? await Decoder.InspectAsync(bytes, mime, limit: false, token)
             : null;
         var sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
         var extension = Extension(mime);

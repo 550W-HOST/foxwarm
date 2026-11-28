@@ -110,7 +110,7 @@ internal sealed partial class ImageBlobStore
                 }
                 var mime = Mime(reference ?? inline!);
                 if (nonvisual && RasterCodec.IsHeif(mime))
-                    _ = HeifDecoder.DecodeImage(bytes);
+                    await Decoder.ValidateHeifAsync(bytes, token);
                 var variant = new RasterCodec.Variant(bytes, mime);
                 if (!nativeReplay && !nonvisual)
                 {
@@ -126,7 +126,7 @@ internal sealed partial class ImageBlobStore
                         if (
                             bytes.LongLength > ImageInputPolicy.MaxBytes
                             || (RasterCodec.IsSafeRaster(mime) || RasterCodec.IsHeif(mime))
-                                && ImageInputPolicy.IsOversized(bytes, mime)
+                                && await ImageInputPolicy.IsOversizedAsync(Decoder, bytes, mime, token)
                         )
                         {
                             var fallback = AppendFileFallback(parts, part, mime);
@@ -134,11 +134,14 @@ internal sealed partial class ImageBlobStore
                                 toolFiles.Add((fallback, SessionWait.Text(part["toolUseId"])));
                             continue;
                         }
-                        variant = await OptimizeAsync(bytes, mime, outputFormat);
+                        variant = await OptimizeAsync(bytes, mime, outputFormat, token);
                         ProviderImageParts.SetSentDimensions(part, variant.Width, variant.Height);
                     }
-                    catch (ImageInputException)
-                        when (reference is null && !RasterCodec.IsHeif(mime))
+                    catch (ImageInputException error)
+                        when (error is not ImageProcessingException
+                            && reference is null
+                            && !RasterCodec.IsHeif(mime)
+                        )
                     { /* Preserve previously unvalidated legacy inline payloads. */
                     }
                 }
@@ -297,10 +300,10 @@ internal sealed partial class ImageBlobStore
         return part;
     }
 
-    private async Task<RasterCodec.Variant> OptimizeAsync(byte[] bytes, string mime, string output)
+    private async Task<RasterCodec.Variant> OptimizeAsync(byte[] bytes, string mime, string output, CancellationToken token)
     {
         if (RasterCodec.IsHeif(mime))
-            HeifDecoder.RequirePrerequisite();
+            await Decoder.RequireHeifAsync(token);
         // Different native encoder policy => separate disposable cache from Source variants.
         var key = Convert.ToHexStringLower(
             SHA256.HashData(
@@ -362,20 +365,20 @@ internal sealed partial class ImageBlobStore
                     {
                         var resultBytes = passthrough ? bytes : payload;
                         var probe = RasterCodec.IsSafeRaster(resultMime)
-                            ? RasterCodec.Inspect(resultBytes, resultMime)
+                            ? await Decoder.InspectAsync(resultBytes, resultMime, limit: true, CancellationToken.None)
                             : null;
                         return new(resultBytes, resultMime, probe?.Width, probe?.Height);
                     }
                 }
             }
             catch (Exception error)
-                when (error
-                        is IOException
+                when (error is not ImageProcessingException
+                    && error is IOException
                             or System.Text.Json.JsonException
                             or InvalidOperationException
                             or UnauthorizedAccessException
                 ) { }
-            var converted = RasterCodec.Optimize(bytes, mime, output);
+            var converted = await Decoder.OptimizeAsync(bytes, mime, output);
             if (converted.Bytes.Length > 32 * 1024 * 1024)
                 return converted;
             var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";

@@ -426,9 +426,7 @@ internal sealed partial class SessionManager
                 ?? match["inlineData"] as JsonObject
                 ?? new JsonObject()
         );
-        Foxwarm.Images.RasterCodec.Variant cropped;
-        try { cropped = Foxwarm.Images.RasterCrop.Crop(bytes, mime, x, y, width, height); }
-        catch (Foxwarm.Images.RasterCrop.Outside bounds) { throw bounds.ForRectangle(x, y, width, height); }
+        var cropped = await Images.Decoder.CropAsync(bytes, mime, x, y, width, height, token);
         var outputBytes = cropped.Bytes;
         var outputMime = cropped.MimeType;
         var output =

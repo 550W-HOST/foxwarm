@@ -264,6 +264,13 @@ jobs:
           npm --prefix packages/webui ci
       - name: Build managed delivery
         run: npm run build
+      - name: Stage the isolated decoder fixture for hosted image tests
+        timeout-minutes: 3
+        run: |
+          set -eu
+          dotnet publish dotnet/Foxwarm.ImageDecoder -c Release -r linux-x64 -o "$RUNNER_TEMP/decoder"
+          install -d dotnet/Foxwarm.Tests/bin/Debug/net10.0
+          install -m755 "$RUNNER_TEMP/decoder/Foxwarm.ImageDecoder" "$RUNNER_TEMP/decoder/libSkiaSharp.so" dotnet/Foxwarm.Tests/bin/Debug/net10.0/
       # A cache hit only saves the download: the script fetches the pinned packages from the
       # permanent archive whenever the prefix is missing.
       - name: Restore hosted fixtures

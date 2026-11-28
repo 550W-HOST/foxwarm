@@ -117,9 +117,11 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                         bytes = buffer.ToArray();
                         try
                         {
-                            isImage = !ImageInputPolicy.IsOversized(bytes, mime);
+                            isImage = !await ImageInputPolicy.IsOversizedAsync(
+                                sessions.Images.Decoder, bytes, mime, token
+                            );
                         }
-                        catch (ImageInputException)
+                        catch (ImageInputException error) when (error is not ImageProcessingException)
                         { /* Invalid metadata retains ordinary image ingress failure. */
                         }
                         source.Position = 0;
@@ -232,7 +234,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
         catch (Exception error)
         {
             throw new UploadPreparationException(
-                "Attachment preparation failed. "
+                (error is ImageProcessingException ? "" : "Attachment preparation failed. ")
                     + (
                         saved.Count > 0
                             ? $"{saved.Count} file(s) were saved and were not removed. "

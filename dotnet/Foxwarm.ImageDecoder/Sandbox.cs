@@ -55,6 +55,10 @@ internal static partial class Sandbox
 
     internal static unsafe bool Enter()
     {
+        // NativeAOT starts its finalizer thread asynchronously. Its libc/runtime startup
+        // registers thread state and names the thread. Join that initialization before TSYNC
+        // rather than allowing those extra syscalls while processing media.
+        GC.WaitForPendingFinalizers();
         // prlimit installs both hard and soft limits before the native runtime starts. A direct
         // invocation without these ceilings must fail before reading any media, too.
         if (!Capped(9, 1UL << 30) || !Capped(0, 10) || !Capped(4, 0))
