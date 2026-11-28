@@ -50,11 +50,11 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
     internal async Task MeshAsync(HttpContext context)
     {
         var request = context.Request;
-        var attempt = authentication.Accept(request);
+        var attempt = authentication.Accept(request, out var full);
         if (attempt is null)
         {
-            context.Response.StatusCode = StatusCodes.Status403Forbidden;
-            context.Response.Headers["Foxwarm-Mesh-Rejected"] = "1";
+            context.Response.StatusCode = full ? StatusCodes.Status503ServiceUnavailable : StatusCodes.Status403Forbidden;
+            if (!full) context.Response.Headers["Foxwarm-Mesh-Rejected"] = "1";
             return;
         }
         MeshAuthentication.StripControlHeaders(request.Headers);
@@ -127,6 +127,11 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
                 ?? (request.ContentLength > 0 || request.Headers.ContainsKey("Transfer-Encoding"));
             while (!budget.IsCancellationRequested)
             {
+                if (await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false) != slug)
+                {
+                    context.Response.StatusCode = StatusCodes.Status404NotFound;
+                    return;
+                }
                 var state = await ReadAsync(slug, budget.Token).ConfigureAwait(false);
                 if (state is not { Available: true }) break;
                 var route = state.Owner;
@@ -134,8 +139,16 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
                     route = await ActivateAsync(slug, state, request.Host.Value, budget.Token).ConfigureAwait(false);
                 if (route is not null && !state.Draining)
                 {
-                    if (route.Boot == boot)
+                    // A previously forwarded upload has already used the public body feature.
+                    // Even if the next owner is this boot, enter its mesh listener with a fresh
+                    // owner-side limit and a body the selected route can configure before reading.
+                    if (route.Boot == boot && body is null)
                     {
+                        if (await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false) != slug)
+                        {
+                            context.Response.StatusCode = StatusCodes.Status404NotFound;
+                            return;
+                        }
                         if (activations.TryAdmitExact(slug, route.Epoch, route.Boot) is { } local)
                         {
                             using (local.Admission)
@@ -151,6 +164,9 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
                     {
                         if (hasBody && body is null)
                         {
+                            // Only the owner's route knows whether to keep its normal default.
+                            if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } size)
+                                size.MaxRequestBodySize = null;
                             if (request.ContentLength is null or <= ForwardedBody.Limit)
                             {
                                 reservedBuffer = buffers.Wait(0);

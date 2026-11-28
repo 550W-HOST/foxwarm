@@ -8,12 +8,15 @@ namespace Foxwarm.Hosted.Forwarding;
 internal enum DispatchOutcome { Completed, NotDispatched, Refused }
 
 /// <summary>One connection pool for the boot. An internal transport resend carries the original nonce.</summary>
-internal sealed class MeshTransport(MeshAuthentication authentication) : IDisposable
+internal sealed class MeshTransport(MeshAuthentication authentication, HttpMessageInvoker client) : IDisposable
 {
+    internal static readonly TimeSpan KeepAlivePingDelay = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan KeepAlivePingTimeout = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan PhysicalWriteTimeout = TimeSpan.FromSeconds(20);
     private static readonly HttpRequestOptionsKey<AttemptBoundary> Boundary = new("Foxwarm.MeshAttempt");
-    private readonly HttpMessageInvoker client = CreateClient();
+    internal MeshTransport(MeshAuthentication authentication) : this(authentication, new HttpMessageInvoker(CreateHandler())) { }
 
-    private static HttpMessageInvoker CreateClient()
+    internal static SocketsHttpHandler CreateHandler()
     {
         // Only RouteDirectory/ReplicaRegistry supply destinations, never a caller's URL.
         var handler = (SocketsHttpHandler)EgressHttp.Handler(EgressPolicy.Unguarded, EgressPurpose.Deployment,
@@ -21,6 +24,10 @@ internal sealed class MeshTransport(MeshAuthentication authentication) : IDispos
         handler.AutomaticDecompression = DecompressionMethods.None;
         handler.ActivityHeadersPropagator = null;
         handler.EnableMultipleHttp2Connections = true;
+        handler.KeepAlivePingDelay = KeepAlivePingDelay;
+        handler.KeepAlivePingTimeout = KeepAlivePingTimeout;
+        handler.KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always;
+        handler.PlaintextStreamFilter = (connection, _) => new(new ConnectionWriter(connection.PlaintextStream));
         // SocketsHttpHandler encodes headers on the selected connection, after the pool wait
         // and connect. From this point bytes may be written; never infer non-dispatch after it.
         handler.RequestHeaderEncodingSelector = (_, message) =>
@@ -29,7 +36,24 @@ internal sealed class MeshTransport(MeshAuthentication authentication) : IDispos
                 attempt.StartWriting();
             return null;
         };
-        return new HttpMessageInvoker(handler);
+        return handler;
+    }
+
+    private sealed class ConnectionWriter(Stream stream) : MeshDuplexStream(stream)
+    {
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> bytes, CancellationToken token = default)
+        {
+            var writing = Inner.WriteAsync(bytes, token);
+            return writing.IsCompleted ? writing : WaitForWriteAsync(writing);
+        }
+
+        private async ValueTask WaitForWriteAsync(ValueTask writing)
+        {
+            // Keepalive can fail streams already registered with HTTP/2, but not a HEADERS
+            // entry waiting behind this write. Closing the socket wakes that queue as well.
+            using var timeout = new Timer(static socket => ((Stream)socket!).Dispose(), Inner, PhysicalWriteTimeout, Timeout.InfiniteTimeSpan);
+            await writing.ConfigureAwait(false);
+        }
     }
 
     private static readonly ForwarderRequestConfig Config = new()
@@ -58,6 +82,7 @@ internal sealed class MeshTransport(MeshAuthentication authentication) : IDispos
         DispatchRoute route, string slug, CancellationToken budget, Action endHold)
     {
         using var boundary = new AttemptBoundary(budget, context.RequestAborted, endHold);
+        using var end = WebSocketEnd.Observe(context.Features, boundary.ClientEof);
         var transform = new MeshTransform(authentication, route, slug, boundary);
         var error = await forwarder.SendAsync(context, route.MeshAddress!, client, Config, transform, boundary.Token)
             .ConfigureAwait(false);
@@ -66,7 +91,8 @@ internal sealed class MeshTransport(MeshAuthentication authentication) : IDispos
             context.Response.Clear();
             return DispatchOutcome.Refused;
         }
-        if (error == ForwarderError.None || context.RequestAborted.IsCancellationRequested)
+        if (error == ForwarderError.None || context.RequestAborted.IsCancellationRequested
+            || transform.ResponseComplete && error is ForwarderError.RequestBodyCanceled or ForwarderError.RequestBodyClient or ForwarderError.RequestBodyDestination)
             return DispatchOutcome.Completed;
         if (context.Response.HasStarted)
         {
@@ -102,14 +128,17 @@ internal sealed class MeshTransport(MeshAuthentication authentication) : IDispos
         internal bool Writing => Volatile.Read(ref writing) != 0;
         internal void StartWriting()
         {
-            if (Interlocked.Exchange(ref writing, 1) != 0)
-                return;
+            if (Writing) return;
             deadline.Dispose();
             Token.ThrowIfCancellationRequested();
-            endHold();
+            Volatile.Write(ref writing, 1);
         }
+        internal void EndHold() => endHold();
+        internal void ClientEof() => sending.CancelAfter(WebSocketEnd.CloseGrace);
+
         public void Dispose()
         {
+            EndHold();
             deadline.Dispose();
             sending.Dispose();
         }
@@ -120,6 +149,7 @@ internal sealed class MeshTransport(MeshAuthentication authentication) : IDispos
     {
         private MeshAttempt? attempt;
         internal bool Refused { get; private set; }
+        internal bool ResponseComplete { get; private set; }
 
         public override async ValueTask TransformRequestAsync(HttpContext context, HttpRequestMessage message,
             string destinationPrefix, CancellationToken token)
@@ -138,9 +168,18 @@ internal sealed class MeshTransport(MeshAuthentication authentication) : IDispos
             message.Options.Set(Boundary, boundary);
         }
 
+        public override async ValueTask TransformResponseTrailersAsync(HttpContext context, HttpResponseMessage response,
+            CancellationToken token)
+        {
+            await base.TransformResponseTrailersAsync(context, response, token).ConfigureAwait(false);
+            // YARP invokes this only after copying the *entire* downstream response body.
+            ResponseComplete = true;
+        }
+
         public override async ValueTask<bool> TransformResponseAsync(HttpContext context, HttpResponseMessage? response,
             CancellationToken token)
         {
+            if (response is not null) boundary.EndHold();
             if (response?.StatusCode == HttpStatusCode.MisdirectedRequest && attempt is not null
                 && response.Headers.TryGetValues(MeshAuthentication.Refusal, out var values)
                 && values.ToArray() is [var proof] && authentication.IsRefusal(attempt, proof))

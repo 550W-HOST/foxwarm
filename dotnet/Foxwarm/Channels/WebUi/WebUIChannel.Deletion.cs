@@ -16,21 +16,14 @@ internal sealed partial class WebUIChannel
                     return Results.StatusCode(503);
                 try
                 {
-                    JsonObject? input = null;
-                    if (MayHaveBody(request))
+                    JsonObject? input;
+                    try
                     {
-                        try
-                        {
-                            input = await JsonNode.ParseAsync(request.Body) as JsonObject;
-                        }
-                        catch (JsonException error)
-                        {
-                            return Results.BadRequest(new JsonObject { ["error"] = error.Message });
-                        }
-                        if (input is null)
-                            return Results.BadRequest(
-                                new JsonObject { ["error"] = "Deletion request must be an object." }
-                            );
+                        input = await ReadOptionalObjectAsync(request, "Deletion request must be an object.");
+                    }
+                    catch (Exception error) when (error is JsonException or InvalidDataException)
+                    {
+                        return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                     }
                     var recursive = SessionCatalog.Flag(input?["includeDescendants"]);
                     var identity = RouteIdentity(request, sessionOnly: true);

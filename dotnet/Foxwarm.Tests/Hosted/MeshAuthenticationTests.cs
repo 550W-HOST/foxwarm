@@ -53,6 +53,25 @@ public sealed class MeshAuthenticationTests
         Assert.Null(owner.Accept(Request(signed.Header, "/item?a=%2F")));
     }
 
+    [Fact]
+    public void FullNonceWindowRefusesNewAdmissionsUntilExpiryWithoutEvictingAnAcceptedNonce()
+    {
+        var clock = new Clock();
+        var auth = new MeshAuthentication(RandomNumberGenerator.GetBytes(32), "owner", clock, nonceLimit: 2);
+        HttpRequest New() => Request(auth.Sign("dispatch", "owner", "alpha", 7, "GET", "Alpha.test:81", "/").Header, "/");
+        var a = New();
+        var b = New();
+        Assert.NotNull(auth.Accept(a, out _));
+        Assert.NotNull(auth.Accept(b, out _));
+        Assert.Null(auth.Accept(New(), out var full));
+        Assert.True(full);
+        Assert.Null(auth.Accept(a, out full));
+        Assert.False(full);
+        clock.Now = clock.Now.AddSeconds(61);
+        Assert.NotNull(auth.Accept(New(), out full));
+        Assert.False(full);
+    }
+
     private static HttpRequest Request(string header, string target, string method = "GET", string authority = "Alpha.test:81")
     {
         var context = new DefaultHttpContext();

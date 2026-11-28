@@ -135,6 +135,7 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
                     or "/api/sessions/{id}/approvals/{approvalId}"
                     or "/api/sessions/{id}/blobs/{blobId}/download"
             ) => true,
+            ("CONNECT", "/api/webui/stream") => true,
             ("GET" or "HEAD", "/api/sessions/{id}/blobs/{blobId}") => true,
             _ => false,
         };

@@ -20,6 +20,7 @@ public sealed partial class TenantReplicaTests
         app.Map("/wire", async (HttpContext c) =>
         {
             Interlocked.Increment(ref fixture.ApplicationCalls);
+            c.Response.Headers["X-Test-Body-Limit"] = c.Features.Get<IHttpMaxRequestBodySizeFeature>()?.MaxRequestBodySize?.ToString() ?? "none";
             var h = c.Request.Headers;
             if (h.ContainsKey("Forwarded") || h.ContainsKey("X-Forwarded-Host") || h.ContainsKey("Foxwarm-Mesh"))
                 throw new InvalidOperationException("The edge leaked a control header.");
@@ -55,6 +56,15 @@ public sealed partial class TenantReplicaTests
         {
             using var socket = await c.WebSockets.AcceptWebSocketAsync("tenant");
             Interlocked.Increment(ref fixture.ApplicationCalls);
+            if (c.Request.Query.ContainsKey("transport"))
+            {
+                await fixture.Continue.Task.WaitAsync(c.RequestAborted);
+                await socket.SendAsync("final"u8.ToArray(), WebSocketMessageType.Text, true, c.RequestAborted);
+                try { await socket.ReceiveAsync(new ArraySegment<byte>(new byte[32]), c.RequestAborted); }
+                catch (Exception error) when (error is WebSocketException or OperationCanceledException) { }
+                finally { fixture.Entered.TrySetResult(); }
+                return;
+            }
             if (c.Request.Query.ContainsKey("owner"))
             {
                 await socket.SendAsync("owner final"u8.ToArray(), WebSocketMessageType.Text, true, c.RequestAborted);
@@ -78,6 +88,36 @@ public sealed partial class TenantReplicaTests
     }
 
     [Fact]
+    public async Task RemoteNodeFileTransferStreamsPastTheFrontDefaultToTheRealTransferRoute()
+    {
+        await using var nodes = new NodeFileTransferTests.Fixture();
+        await nodes.Start();
+        await using var owner = await StartAsync("alpha");
+        owner.AddRoutes = nodes.Manager.Nodes.RegisterFileStreamRoutes;
+        await owner.WhoAmIAsync("alpha");
+        await using var edge = await StartReplicaAsync(owner.Database, "replica-b", owner.MeshKey);
+        var credentials = nodes.Manager.Nodes.Registry.Create("source");
+        var socket = await nodes.Connect("source", credentials, streaming: true);
+        var pending = nodes.Manager.Nodes.OpenReadStreamAsync("source", "large.bin", nodes.Owner, false, default);
+        var call = await NodeFileTransferTests.Fixture.Read(socket);
+        var payload = new byte[3 * 1024 * 1024];
+        payload[^1] = 57;
+        using var request = new HttpRequestMessage(HttpMethod.Put,
+            $"http://127.0.0.1:{edge.Replica.FrontPort}/node/transfer/{call["transferId"]}");
+        request.Headers.Host = "alpha.test";
+        request.Headers.Add("X-Foxwarm-Node", "source");
+        request.Headers.Authorization = new("Bearer", credentials["authToken"]!.ToString());
+        request.Content = new ByteArrayContent(payload);
+        var uploading = edge.Client.SendAsync(request);
+        await using var transfer = await pending.WaitAsync(TimeSpan.FromSeconds(10));
+        using var actual = new MemoryStream();
+        await transfer.Stream.CopyToAsync(actual);
+        Assert.Equal(payload, actual.ToArray());
+        using var result = await uploading;
+        Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+    }
+
+    [Fact]
     public async Task ARemoteOwnerGetsTheOriginalRequestExactlyOnceAndOnlyTheOwnerSeesItsCredentials()
     {
         await using var owner = await StartAsync("alpha");
@@ -85,7 +125,7 @@ public sealed partial class TenantReplicaTests
         await using var edge = await StartReplicaAsync(owner.Database, "replica-b", owner.MeshKey);
         const string path = "/wire?q=a%2Fb&q=b%2Bc";
         using var request = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{edge.Replica.FrontPort}{path}");
-        request.Headers.Host = "Alpha.test:8443";
+        request.Headers.Host = "Alpha.test.:8443";
         request.Headers.TryAddWithoutValidation("Authorization", "Bearer alpha-key");
         request.Headers.TryAddWithoutValidation("Cookie", "session=alpha");
         request.Headers.TryAddWithoutValidation("Foxwarm-Mesh", "from-public-client");
@@ -94,7 +134,7 @@ public sealed partial class TenantReplicaTests
         request.Content = new StringContent("one body");
         using var response = await edge.Client.SendAsync(request);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal($"Alpha.test:8443|{path}|Bearer alpha-key|session=alpha|one body", await response.Content.ReadAsStringAsync());
+        Assert.Equal($"Alpha.test.:8443|{path}|Bearer alpha-key|session=alpha|one body", await response.Content.ReadAsStringAsync());
         using var final = await edge.GetAsync("alpha", "/application-421");
         Assert.Equal(HttpStatusCode.MisdirectedRequest, final.StatusCode);
         Assert.False(final.Headers.Contains("Foxwarm-Mesh-Refusal"));
@@ -181,9 +221,10 @@ public sealed partial class TenantReplicaTests
     }
 
     [Theory]
-    [InlineData(100, true)]
-    [InlineData(65537, false)]
-    public async Task AControlRefusalRetriesOnlyAnUploadTheEdgeCanStillSend(int length, bool retried)
+    [InlineData(100, true, false)]
+    [InlineData(100, true, true)]
+    [InlineData(65537, false, false)]
+    public async Task AControlRefusalRetriesOnlyAnUploadTheEdgeCanStillSend(int length, bool retried, bool moveToEdge)
     {
         await using var owner = await StartAsync("alpha");
         await owner.WhoAmIAsync("alpha");
@@ -203,6 +244,11 @@ public sealed partial class TenantReplicaTests
             // The tenant application still sees none of those bytes.
             await c.Request.Body.CopyToAsync(Stream.Null);
             await owner.Database.ScalarAsync("UPDATE replicas SET mesh_address=$1 WHERE replica_id=$2", original, boot);
+            if (moveToEdge)
+            {
+                owner.Stop.Cancel();
+                await owner.Run.WaitAsync(TimeSpan.FromSeconds(3));
+            }
             Interlocked.Increment(ref declines);
             c.Response.StatusCode = 421;
             c.Response.Headers[MeshAuthentication.Refusal] = signer.Refuse(attempt);
@@ -217,8 +263,39 @@ public sealed partial class TenantReplicaTests
         using var result = await edge.Client.SendAsync(post);
         Assert.Equal(1, declines);
         Assert.Equal(retried ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable, result.StatusCode);
-        if (retried) Assert.EndsWith("|" + data, await result.Content.ReadAsStringAsync());
-        Assert.Equal(retried ? 1 : 0, owner.ApplicationCalls);
+        if (retried)
+        {
+            Assert.EndsWith("|" + data, await result.Content.ReadAsStringAsync());
+            Assert.Equal("2097152", Assert.Single(result.Headers.GetValues("X-Test-Body-Limit")));
+        }
+        Assert.Equal(retried ? 1 : 0, (moveToEdge ? edge : owner).ApplicationCalls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RediscoveryEndsARequestWhoseOriginalHostnameBindingChanged(bool reassigned)
+    {
+        await using var f = await StartAsync("alpha", "beta");
+        await f.WhoAmIAsync("beta");
+        using (var missing = await f.GetAsync("marker")) Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        f.StartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pending = f.GetAsync("alpha");
+        await UntilAsync(() => f.EventList().Contains("alpha:start-waits"), "initial name resolved and cold start reached its gate");
+        await f.Database.ExecuteOwnerAsync((reassigned
+            ? "UPDATE tenant_hostnames SET kind='custom',tenant_id=(SELECT tenant_id FROM tenants WHERE name='beta') WHERE hostname='alpha.test';"
+            : "DELETE FROM tenant_hostnames WHERE hostname='alpha.test';")
+            + "INSERT INTO tenant_hostnames(hostname,tenant_id,kind) SELECT 'marker.test',tenant_id,'custom' FROM tenants WHERE name='beta';");
+        // The same commit changes both names. A formerly negative name becoming positive
+        // shows the directory has invalidated without starting another request for the held slug.
+        await UntilAsync(async () =>
+        {
+            using var marker = await f.GetAsync("marker");
+            return marker.IsSuccessStatusCode;
+        }, "hostname change observed");
+        f.StartGate.SetResult();
+        using var refusal = await pending;
+        Assert.Equal(HttpStatusCode.NotFound, refusal.StatusCode);
     }
 
     [Fact]
@@ -298,6 +375,37 @@ public sealed partial class TenantReplicaTests
         Assert.Equal(status, close.CloseStatus);
         Assert.Equal(reason, close.CloseStatusDescription);
         if (!ownerCloses) Assert.Contains("client final", owner.EventList());
+    }
+
+    [Fact]
+    public async Task ClientTransportFinWithoutACloseFrameEndsTheOwnerStreamWithinTheGraceBound()
+    {
+        await using var owner = await StartAsync("alpha");
+        await owner.WhoAmIAsync("alpha");
+        await using var edge = await StartReplicaAsync(owner.Database, "replica-b", owner.MeshKey);
+        using var client = new System.Net.Sockets.TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, edge.Replica.FrontPort!.Value);
+        await using var connection = client.GetStream();
+        using var bound = new CancellationTokenSource(WebSocketEnd.CloseGrace + TimeSpan.FromSeconds(5));
+        var key = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+        var upgrade = $"GET /socket?transport HTTP/1.1\r\nHost: alpha.test\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Protocol: tenant\r\n\r\n";
+        await connection.WriteAsync(System.Text.Encoding.ASCII.GetBytes(upgrade), bound.Token);
+        using var headers = new MemoryStream();
+        var one = new byte[1];
+        while (!System.Text.Encoding.ASCII.GetString(headers.ToArray()).EndsWith("\r\n\r\n"))
+        {
+            await connection.ReadExactlyAsync(one, bound.Token);
+            headers.WriteByte(one[0]);
+        }
+        Assert.StartsWith("HTTP/1.1 101", System.Text.Encoding.ASCII.GetString(headers.ToArray()));
+        owner.Continue.SetResult();
+        var frame = new byte[7];
+        await connection.ReadExactlyAsync(frame, bound.Token);
+        Assert.Equal("final", System.Text.Encoding.UTF8.GetString(frame, 2, 5));
+        // Kestrel can surface a TCP FIN as RequestAborted: once this public transport closes
+        // it cannot deliver new reverse bytes. Already delivered data is preserved.
+        client.Client.Shutdown(System.Net.Sockets.SocketShutdown.Send);
+        await owner.Entered.Task.WaitAsync(bound.Token);
     }
 
     [Fact]

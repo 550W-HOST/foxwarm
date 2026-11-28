@@ -8,7 +8,8 @@ namespace Foxwarm.Nodes;
 internal sealed partial class NodeBootstrap(
     NodeConnectionHub hub,
     PublicWebAddress address,
-    bool hasConfiguredUrl = true
+    bool hasConfiguredUrl = true,
+    bool usePublicTemplateUrl = false
 )
 {
     private static readonly string[] Templates =
@@ -260,7 +261,7 @@ internal sealed partial class NodeBootstrap(
                     await context.Response.WriteAsync(
                         text.Replace(
                                 "__FOXWARM_DEFAULT_BASE_URL__",
-                                InferRequestBaseUrl(context.Request)
+                                usePublicTemplateUrl ? address.BaseUrl.TrimEnd('/') : InferRequestBaseUrl(context.Request)
                             )
                             .Replace("__FOXWARM_NATIVE_CLI_URL__", NativeDownloadUrl)
                             .Replace(

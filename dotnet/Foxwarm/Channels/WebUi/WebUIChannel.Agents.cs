@@ -16,6 +16,17 @@ internal sealed partial class WebUIChannel
         request.HttpContext.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody
         ?? (request.ContentLength is > 0 || request.Headers.TransferEncoding.Count > 0);
 
+    private static async Task<JsonObject?> ReadOptionalObjectAsync(HttpRequest request, string invalid)
+    {
+        if (!MayHaveBody(request)) return null;
+        using var input = new MemoryStream();
+        await request.Body.CopyToAsync(input, request.HttpContext.RequestAborted);
+        if (input.Length == 0) return null;
+        input.Position = 0;
+        return await JsonNode.ParseAsync(input, cancellationToken: request.HttpContext.RequestAborted) as JsonObject
+            ?? throw new InvalidDataException(invalid);
+    }
+
     private void RegisterAgentRoutes(WebApplication app)
     {
         app.MapGet(
@@ -300,12 +311,8 @@ internal sealed partial class WebUIChannel
                 {
                     // Optional body: { acknowledgeDescendants: boolean }.
                     var acknowledge = false;
-                    if (MayHaveBody(request))
+                    if (await ReadOptionalObjectAsync(request, "Migration options need an object.") is { } body)
                     {
-                        var body =
-                            await JsonNode.ParseAsync(request.Body, cancellationToken: token)
-                                as JsonObject
-                            ?? throw new InvalidDataException("Migration options need an object.");
                         if (body.Any(item => item.Key != "acknowledgeDescendants"))
                             throw new InvalidDataException(
                                 "Only acknowledgeDescendants is accepted."
@@ -323,7 +330,7 @@ internal sealed partial class WebUIChannel
                     );
                 }
                 catch (Exception error)
-                    when (error is InvalidDataException or IOException or InvalidOperationException)
+                    when (error is InvalidDataException or IOException or InvalidOperationException or JsonException)
                 {
                     return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
@@ -492,22 +499,7 @@ internal sealed partial class WebUIChannel
             {
                 try
                 {
-                    JsonObject? body = null;
-                    if (MayHaveBody(request))
-                    {
-                        // A zero-byte chunked JSON stream is the same as a bodyless request.
-                        using var input = new MemoryStream();
-                        await request.Body.CopyToAsync(input);
-                        if (input.Length > 0)
-                        {
-                            input.Position = 0;
-                            body =
-                                await JsonNode.ParseAsync(input) as JsonObject
-                                ?? throw new InvalidDataException(
-                                    "Session creation must be an object."
-                                );
-                        }
-                    }
+                    var body = await ReadOptionalObjectAsync(request, "Session creation must be an object.");
                     SessionOwner hosted;
                     string? parentId = null;
                     if (body is null || body.Count == 0)

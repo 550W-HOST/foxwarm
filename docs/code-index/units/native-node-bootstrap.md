@@ -11,7 +11,7 @@ Main-generated WebUI, `/node` and bootstrap-info commands share the existing tem
 
 ## Existing caller effects
 
-The [external Node unit](./external-nodes.md#bootstrap-address-ownership) owns configured/browser/explicit addresses, deployment prefixes, public request-derived defaults and validation before credential creation. Native selection does not change those rules or pairing versus direct-auth command generation. The CLI receives the same host, ID, pairing/auth token and credential-file arguments. Existing credential files remain readable; credential persistence and reconnect remain CLI-owned.
+The [external Node unit](./external-nodes.md#bootstrap-address-ownership) owns configured/browser/explicit addresses, deployment prefixes, file-mode request-derived defaults, hosted tenant template URLs and validation before credential creation. Native selection does not change those rules or pairing versus direct-auth command generation. The CLI receives the same host, ID, pairing/auth token and credential-file arguments. Existing credential files remain readable; credential persistence and reconnect remain CLI-owned.
 
 Bare-metal installation requires `--dir`. Its runtime, generated launcher, credentials, logs, PID/mode, environment file and systemd unit remain under that root. The process cwd remains `<dir>/foxwarm-node`, retaining existing Agent path resolution. Foreground is the default, background prefers tmux then nohup, and systemd invokes the same foreground launcher without another daemon layer.
 

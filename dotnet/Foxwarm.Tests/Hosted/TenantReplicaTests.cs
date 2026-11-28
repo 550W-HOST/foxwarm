@@ -65,6 +65,7 @@ public sealed partial class TenantReplicaTests
         internal readonly List<string> Log = [];
         internal int Exits;
         internal int Builds;
+        internal Action<WebApplication>? AddRoutes;
         internal int ApplicationCalls;
         internal bool OwnsDatabase;
         internal required byte[] MeshKey { get; init; }
@@ -201,6 +202,7 @@ public sealed partial class TenantReplicaTests
                 var grant = context.Activation.Grant;
                 app.MapGet("/whoami", () => $"{grant.Tenant}:{grant.Epoch}");
                 MapForwardingRoutes(app, fixture);
+                fixture.AddRoutes?.Invoke(app);
                 context.Activation.Fence.Lost.Register(() => fixture.Event($"{grant.Tenant}:fenced"));
                 var runtime = new Runtime(app, grant.Tenant, grant.Epoch, fixture) { StatementLimit = context.Database.MaxInFlight };
                 lock (fixture.Runtimes)

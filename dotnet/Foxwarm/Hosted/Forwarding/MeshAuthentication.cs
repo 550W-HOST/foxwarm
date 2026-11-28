@@ -10,15 +10,16 @@ namespace Foxwarm.Hosted.Forwarding;
 internal sealed record MeshAttempt(string Purpose, string Sender, string Receiver, string Tenant, long? Epoch, string Nonce);
 
 /// <summary>Hop authentication shared by one boot's mesh client and listener.</summary>
-internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? clock = null)
+internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? clock = null, int nonceLimit = MeshAuthentication.MaxNonces)
 {
     internal const string Header = "Foxwarm-Mesh";
     internal const string Refusal = "Foxwarm-Mesh-Refusal";
+    internal const int MaxNonces = 262_144;
     private const int SkewSeconds = 30;
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
     private readonly object gate = new();
-    private readonly HashSet<string> seen = new(StringComparer.Ordinal);
-    private readonly PriorityQueue<string, long> expiry = new();
+    private readonly HashSet<UInt128> seen = [];
+    private readonly PriorityQueue<UInt128, long> expiry = new();
 
     internal (MeshAttempt Attempt, string Header) Sign(string purpose, string receiver, string tenant, long? epoch,
         string method, string authority, string target)
@@ -31,8 +32,11 @@ internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? 
         return (attempt, string.Join(';', fields) + ";" + Convert.ToHexStringLower(mac));
     }
 
-    internal MeshAttempt? Accept(HttpRequest request)
+    internal MeshAttempt? Accept(HttpRequest request) => Accept(request, out _);
+
+    internal MeshAttempt? Accept(HttpRequest request, out bool full)
     {
+        full = false;
         if (!request.Headers.TryGetValue(Header, out var values) || values.Count != 1 || values[0] is not { Length: <= 2048 } header)
             return null;
         var f = header.Split(';');
@@ -60,9 +64,15 @@ internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? 
                 expiry.Dequeue();
                 seen.Remove(old);
             }
-            if (!seen.Add(f[7]))
+            var nonce = UInt128.Parse(f[7], NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
+            if (seen.Contains(nonce)) return null;
+            if (seen.Count >= nonceLimit)
+            {
+                full = true;
                 return null;
-            expiry.Enqueue(f[7], now + 2 * SkewSeconds);
+            }
+            seen.Add(nonce);
+            expiry.Enqueue(nonce, now + 2 * SkewSeconds);
         }
         return new(f[1], f[2], f[3], f[4], epoch, f[7]);
     }

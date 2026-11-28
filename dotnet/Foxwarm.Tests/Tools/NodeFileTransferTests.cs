@@ -14,7 +14,7 @@ namespace Foxwarm.Tests;
 
 public sealed partial class NodeFileTransferTests
 {
-    private sealed class Fixture : IAsyncDisposable
+    internal sealed class Fixture : IAsyncDisposable
     {
         internal readonly TempDirectory Temp = new();
         internal SessionManager Manager = null!;

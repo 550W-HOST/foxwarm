@@ -696,7 +696,7 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
 
     internal async Task<string?> ResolveAsync(string host, CancellationToken token)
     {
-        var key = Operator.OperatorListener.CanonicalHost(host);
+        var key = (host.EndsWith('.') ? host[..^1] : host).ToLowerInvariant();
         while (true)
         {
             long started;

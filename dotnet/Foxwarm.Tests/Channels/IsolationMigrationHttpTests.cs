@@ -80,7 +80,13 @@ public sealed class IsolationMigrationHttpTests
             );
             Assert.Null(f.Manager.AgentMetadata["guarded"]?["rules"]);
 
-            var applied = await client.PostAsync("/api/agents/guarded/isolation-migration", null);
+            // Initial HTTP/1 headers advertise a body; its terminating chunk carries zero bytes.
+            using var migration = new HttpRequestMessage(HttpMethod.Post, "/api/agents/guarded/isolation-migration")
+            {
+                Content = new StringContent("", System.Text.Encoding.UTF8, "application/json"),
+            };
+            migration.Headers.TransferEncodingChunked = true;
+            var applied = await client.SendAsync(migration);
             Assert.Equal(HttpStatusCode.OK, applied.StatusCode);
             var row = f.Manager.AgentMetadata["guarded"]!.AsObject();
             Assert.True(row["isolated"]!.GetValue<bool>());
@@ -107,6 +113,16 @@ public sealed class IsolationMigrationHttpTests
                 HttpStatusCode.BadRequest,
                 (await client.PostAsync("/api/agents/plain/isolation-migration", null)).StatusCode
             );
+
+            using var created = await client.PostAsJsonAsync("/api/sessions", new { sessionId = "empty-delete" });
+            Assert.True(created.IsSuccessStatusCode, await created.Content.ReadAsStringAsync());
+            using var deletion = new HttpRequestMessage(HttpMethod.Delete, "/api/sessions/empty-delete")
+            {
+                Content = new StringContent("", System.Text.Encoding.UTF8, "application/json"),
+            };
+            deletion.Headers.TransferEncodingChunked = true;
+            using var removed = await client.SendAsync(deletion);
+            Assert.True(removed.IsSuccessStatusCode, await removed.Content.ReadAsStringAsync());
 
             var listed = await client.GetFromJsonAsync<JsonObject>("/api/agents");
             var guarded = listed!["agents"]!
