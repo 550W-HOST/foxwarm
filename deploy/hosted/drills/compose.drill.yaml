@@ -3,6 +3,13 @@
 # exists for the rolling update's surge, and the mock model, a file-mode source installation, an
 # importer and a replica of the imported tenant are added. Paths are relative to deploy/hosted.
 services:
+  foxwarm-master:
+    profiles: [drill]
+    restart: "no"
+    volumes: !override
+      - master:/master
+      - ./drills:/drill:ro
+      - ./drills/deployment.drill.yaml:/etc/foxwarm/deployment.yaml:ro
   foxwarm-1:
     image: ${FOXWARM_DRILL_IMAGE_1:-${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}}
     restart: "no"
@@ -96,6 +103,8 @@ volumes:
   source: {}
 
 secrets:
+  mesh-secret:
+    file: ${FOXWARM_DRILL_SECRETS:?}/mesh-secret
   postgres-password:
     file: ${FOXWARM_DRILL_SECRETS:?}/postgres-password
   owner-password:

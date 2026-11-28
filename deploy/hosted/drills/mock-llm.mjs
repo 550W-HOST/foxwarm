@@ -13,6 +13,7 @@
 //
 // Usage: node mock-llm.mjs [--port <n>] [--host <address>]
 import { createServer } from 'node:http'
+import { fileURLToPath } from 'node:url'
 
 const args = process.argv.slice(2)
 const option = (name, fallback) => {
@@ -34,11 +35,27 @@ const userText = body =>
     .map(part => (typeof part === 'string' ? part : part?.text || ''))
     .join('\n')
 
-const answer = (res, text) => {
-  const output = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
+const answer = (res, text, call) => {
+  const output = call
+    ? [{ type: 'function_call', call_id: 'master-' + call.name, name: call.name, arguments: JSON.stringify(call.args) }]
+    : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
   res.writeHead(200, { 'content-type': 'text/event-stream' })
   res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output } }) + '\n\n')
 }
+
+// A fixed, local tool sequence for the master host acceptance turn. The script control API
+// accepts text and holds only; it cannot supply commands to the operator's shell.
+const masterCalls = [
+  { name: 'exec', args: { command: "printf 'persisted by master exec' > master-restart.txt; printf 'master-exec-ok'" } },
+  {
+    name: 'ctl',
+    args: {
+      command: 'mcp set mastercheck --transport stdio --command python3 --args @peer --enable',
+      values: { peer: [fileURLToPath(new URL('master-peer.py', import.meta.url))] },
+    },
+  },
+  { name: 'run_script', args: { code: "return call_tool('mcp:mastercheck/receipt', {})" } },
+]
 
 const json = (res, status, value) => {
   res.writeHead(status, { 'content-type': 'application/json' })
@@ -102,7 +119,7 @@ const server = createServer(async (req, res) => {
     }
     if (res.destroyed || row.closed) return
     row.answered = true
-    answer(res, step.text || `FINAL:${key}:${round}`)
+    answer(res, step.text || `FINAL:${key}:${round}`, key === 'master-acceptance' && turn ? masterCalls[round] : null)
   } catch (error) {
     if (!res.headersSent) json(res, 500, { error: String(error?.stack || error) })
   }
