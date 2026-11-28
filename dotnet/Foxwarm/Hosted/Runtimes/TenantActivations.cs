@@ -684,7 +684,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                 {
                     generation.Gate.Latch(AdmissionLatch.Stop);
                     generation.Settle(await DisposeBuiltAsync(generation).ConfigureAwait(false));
-                    await ReleaseWhenStoppedAsync(slot, generation, CancellationToken.None).ConfigureAwait(false);
+                    await ReleaseWhenStoppedAsync(slot, generation, CancellationToken.None, recoverUnpublished: true).ConfigureAwait(false);
                     throw new LeaseRefusedException($"Tenant {id.Tenant}'s settings changed during startup.");
                 }
                 generation.Gate.Latch(AdmissionLatch.Fence);
@@ -845,7 +845,7 @@ internal sealed class TenantActivations : IAsyncDisposable
 
     // Releases the tenant's grant once this generation's stop is confirmed and the grant is
     // still current and unclaimed; nothing after an unconfirmed stop.
-    private async Task ReleaseWhenStoppedAsync(Slot slot, TenantGeneration generation, CancellationToken token)
+    private async Task ReleaseWhenStoppedAsync(Slot slot, TenantGeneration generation, CancellationToken token, bool recoverUnpublished = false)
     {
         var result = await generation.Stopped.ConfigureAwait(false);
         if (!result.Confirmed)
@@ -853,7 +853,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         var pending = TakeStoppedGrant(slot, generation);
         if (pending is not null)
         {
-            if (generation.Published)
+            if (generation.Published || recoverUnpublished)
                 await HandBackAsync(slot.Lease, pending, generation, token).ConfigureAwait(false);
             else
                 await ReleaseAsync(slot.Lease, pending, token).ConfigureAwait(false); // Preserve any unarmed occurrence.
@@ -863,7 +863,7 @@ internal sealed class TenantActivations : IAsyncDisposable
     private Task<bool> HandBackAsync(TenantLease lease, PendingRelease pending, TenantGeneration generation, CancellationToken token) =>
         WriteReleaseAsync(pending, () => generation.ScheduleSettled
             ? lease.ReleaseWithWakeupAsync(pending.Grant, generation.HandBack, token)
-            : lease.ReleaseAfterFailedStartAsync(pending.Grant, Backoff(1), true, token));
+            : lease.ReleaseForRecoveryAsync(pending.Grant, generation.Published ? generation.Runtime?.RecoveryOccurrence : null, Backoff(1), token));
 
     private PendingRelease? TakeStoppedGrant(Slot slot, TenantGeneration generation)
     {

@@ -22,6 +22,9 @@ internal sealed class RuntimeWakeups(SessionManager sessions, TenantDb database)
             await journal.StopRetentionAsync().ConfigureAwait(false);
     }
 
+    internal System.Text.Json.Nodes.JsonObject? RecoveryOccurrence =>
+        sessions.Timers.Reconciled ? sessions.Timers.NextWakeup()?.Cron?.ToJson() : null;
+
     internal async Task<WakeupDue?> NextDueAsync(CancellationToken token)
     {
         if (!sessions.Timers.Reconciled)
