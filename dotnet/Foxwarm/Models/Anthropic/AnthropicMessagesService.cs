@@ -286,29 +286,22 @@ internal sealed class AnthropicMessagesService(
         CancellationToken cancellationToken
     )
     {
+        using var decoded = Decode(stream, encoding);
         using var buffer = new MemoryStream();
         var bytes = new byte[8192];
-
+        var limit = success ? 32 * 1024 * 1024 : Net.BoundedResponse.ErrorBytes;
         while (true)
         {
-            var count = await stream.ReadAsync(bytes, activity.Token);
-            if (count == 0)
-                break;
+            var count = await decoded.ReadAsync(bytes, activity.Token);
+            if (count == 0) break;
+            if (buffer.Length + count > limit)
+                throw Net.BoundedResponse.TooLarge("model", "body", limit);
             activity.CancelAfter(RequestTimeout);
             buffer.Write(bytes, 0, count);
         }
         cancellationToken.ThrowIfCancellationRequested();
         activity.Token.ThrowIfCancellationRequested();
-        var raw = buffer.ToArray();
-        if (success && encoding is not null && encoding is "gzip" or "br" or "deflate")
-        {
-            using var compressed = new MemoryStream(raw);
-            using var decoder = Decode(compressed, encoding);
-            using var decoded = new MemoryStream();
-            await decoder.CopyToAsync(decoded, activity.Token);
-            raw = decoded.ToArray();
-        }
-        var text = Encoding.UTF8.GetString(raw);
+        var text = Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
         if (text.StartsWith('\uFEFF'))
             text = text[1..];
         if (!success)

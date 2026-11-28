@@ -34,6 +34,33 @@ public sealed class TenantLimitToolScriptTests
             )
         )!.AsObject();
 
+    [Theory]
+    [InlineData(1, 8)]
+    [InlineData(8, 2)]
+    public async Task PhysicalWorkerCountStaysWithinBothBudgets(int roots, int shared)
+    {
+        var replica = new ReplicaLimits(long.MaxValue, shared);
+        await using var f = await ScriptFixture.Create(limits: TenantLimits.Defaults with { ToolScriptRuns = roots }, replica: replica);
+        var alive = new List<System.Diagnostics.Process>();
+        var maximum = 0;
+        f.Manager.ToolScript.WorkerStarted = pid =>
+        {
+            alive.Add(System.Diagnostics.Process.GetProcessById(pid));
+            maximum = Math.Max(maximum, alive.Count(process => !process.HasExited));
+        };
+        try
+        {
+            var inner = "return call_tool('run_script', {'code': 'return 7'})";
+            var outer = "return call_tool('run_script', {'code': " + System.Text.Json.JsonSerializer.Serialize(inner) + "})";
+            var result = await RunAsync(Dispatcher(f), outer).WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(2, maximum);
+            Assert.All(alive, process => Assert.True(process.HasExited));
+            Assert.Contains("failed", result.ToJsonString());
+            Assert.Equal(0, f.Manager.Admission!.ToolScripts.InUse);
+        }
+        finally { foreach (var process in alive) process.Dispose(); }
+    }
+
     [Fact]
     public async Task ANestedRunUsesItsRootRunsSlot()
     {

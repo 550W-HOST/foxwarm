@@ -33,6 +33,7 @@ internal sealed record TenantReplicaOptions(
     int ReaderVersion
 )
 {
+    internal int TenantHoldLimit { get; init; } = 128;
     internal required MeshSettings Mesh { get; init; }
 
     /// <summary>This replica's placement role (<see cref="ReplicaRoles"/>).</summary>
@@ -180,7 +181,7 @@ internal sealed class TenantReplica
         var registry = new ReplicaRegistry(control);
         var hostnames = new HostnameDirectory(app);
         using var router = new TenantRouter(Replica, new MeshAuthentication(options.Mesh.Secret, Replica),
-            new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, AcceptingNew, log, stop);
+            new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, AcceptingNew, log, stop, options.TenantHoldLimit);
         var placement = new PlacementMaintenance(app, Replica, options, coordinator, () => administrativelyDraining = true, log);
         // Cancellation is the monotonic SIGTERM latch, including while callbacks are in flight.
         string HealthState() => stop.IsCancellationRequested ? "stopping" : !serving.Task.IsCompletedSuccessfully
@@ -760,20 +761,33 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
         }
     }
 
+    private static string Key(string host) => (host.EndsWith('.') ? host[..^1] : host).ToLowerInvariant();
+
+    internal bool TryCached(string host, out HostTenant? tenant)
+    {
+        lock (gate) return TryCachedLocked(Key(host), out tenant);
+    }
+
+    private bool TryCachedLocked(string key, out HostTenant? tenant)
+    {
+        if (cache.TryGetValue(key, out var cached))
+        {
+            if (cached.Expires > clock()) { tenant = cached.Tenant; return true; }
+            Remove(key, cached);
+        }
+        tenant = null;
+        return false;
+    }
+
     internal async Task<HostTenant?> ResolveAsync(string host, CancellationToken token)
     {
-        var key = (host.EndsWith('.') ? host[..^1] : host).ToLowerInvariant();
+        var key = Key(host);
         while (true)
         {
             long started;
             lock (gate)
             {
-                if (cache.TryGetValue(key, out var cached))
-                {
-                    if (cached.Expires > clock())
-                        return cached.Tenant;
-                    Remove(key, cached);
-                }
+                if (TryCachedLocked(key, out var hit)) return hit;
                 started = generation;
             }
             var tenant = await QueryAsync(key, token).ConfigureAwait(false);

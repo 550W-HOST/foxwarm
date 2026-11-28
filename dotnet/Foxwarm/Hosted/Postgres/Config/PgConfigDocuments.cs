@@ -73,30 +73,31 @@ internal sealed class PgConfigDocuments(TenantDb database, string? writer = null
     }
 
     // One statement returns the size and, only within the limit, the text.
-    public byte[]? ReadBounded(ConfigDocumentName name, int maxBytes)
+    private const string BoundedQuery = "SELECT octet_length(text), CASE WHEN octet_length(text) <= $2 THEN text END"
+        + " FROM config_documents WHERE name = $1";
+
+    public byte[]? ReadBounded(ConfigDocumentName name, int maxBytes) => database.Read(tx =>
     {
-        var key = Key(name);
-        var (found, size, text) = database.Read(tx =>
+        using var command = tx.Command(BoundedQuery, Key(name), maxBytes);
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? Bounded(reader, maxBytes) : null;
+    });
+
+    public Task<byte[]?> ReadBoundedAsync(ConfigDocumentName name, int maxBytes, CancellationToken token) =>
+        database.ReadAsync(async (tx, cancel) =>
         {
-            using var command = tx.Command(
-                "SELECT octet_length(text), CASE WHEN octet_length(text) <= $2 THEN text END"
-                    + " FROM config_documents WHERE name = $1",
-                key,
-                maxBytes
-            );
-            using var reader = command.ExecuteReader();
-            if (!reader.Read())
-                return (false, 0, (string?)null);
-            return (true, reader.GetInt32(0), reader.IsDBNull(1) ? null : reader.GetString(1));
-        });
-        if (!found)
-            return null;
-        if (size > maxBytes || text is null)
+            using var command = tx.Command(BoundedQuery, Key(name), maxBytes);
+            using var reader = await command.ExecuteReaderAsync(cancel).ConfigureAwait(false);
+            return await reader.ReadAsync(cancel).ConfigureAwait(false) ? Bounded(reader, maxBytes) : null;
+        }, token: token);
+
+    private static byte[] Bounded(Npgsql.NpgsqlDataReader reader, int maxBytes)
+    {
+        if (reader.GetInt32(0) > maxBytes || reader.IsDBNull(1))
             throw new InvalidDataException("Tool policy exceeds its byte limit.");
-        var bytes = Strict.GetBytes(text);
-        return bytes.Length > maxBytes
-            ? throw new InvalidDataException("Tool policy exceeds its byte limit.")
-            : bytes;
+        var bytes = Strict.GetBytes(reader.GetString(1));
+        if (bytes.Length > maxBytes) throw new InvalidDataException("Tool policy exceeds its byte limit.");
+        return bytes;
     }
 
     public async Task ReplaceAsync(

@@ -138,7 +138,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
         );
         ToolScript = new(Storage.ToolScriptRuns);
         if (Capabilities.Limits is not null)
+        {
             ToolScript.AdmitProcess = token => Admission!.ToolScripts.EnterAsync(token);
+            ToolScript.AdmitWorker = (nested, token) => nested
+                ? new ValueTask<IDisposable>(Admission!.Workers.TryEnter() ?? throw new InvalidOperationException("Too many ToolScript runs are active. Try again when one finishes."))
+                : Admission!.Workers.EnterAsync(token);
+        }
         this.root = Path.GetFullPath(root);
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
         if (Directory.Exists(runtimeFiles))

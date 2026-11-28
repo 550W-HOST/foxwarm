@@ -11,6 +11,7 @@ internal sealed partial class SessionManager
     {
         internal readonly bool Creating = creating;
         internal bool CatalogCreated;
+        internal bool CreatedCold;
         internal bool Retired,
             Retiring;
         internal readonly TaskCompletionSource<SessionOwner> Owner = new(
@@ -464,7 +465,24 @@ internal sealed partial class SessionManager
         }
         try
         {
-            return await action();
+            var owner = await action();
+            if (!slot.CreatedCold) return owner;
+            // The catalog and authority are durable. Drop this creation claim and share
+            // ordinary cold admission with concurrent lookups, including existing joiners.
+            owner = null!;
+            lock (lifecycle) identities.Remove(id);
+            slot.Finished.TrySetResult();
+            try
+            {
+                var loaded = await RequiredAsync(id);
+                slot.Owner.TrySetResult(loaded);
+                return loaded;
+            }
+            catch (Exception error)
+            {
+                slot.Owner.TrySetException(error); // Ordinary lookup waiters receive the cold-load failure.
+                throw new CommittedSessionCreationException(id, $"Session '{id}' was created, but it couldn't be opened yet. Open it again in a moment.", error);
+            }
         }
         catch (Exception error)
         {

@@ -56,6 +56,8 @@ internal interface IConfigDocumentStore
     /// one value, throws; it is never reported as absent.
     /// </summary>
     byte[]? ReadBounded(ConfigDocumentName name, int maxBytes);
+    Task<byte[]?> ReadBoundedAsync(ConfigDocumentName name, int maxBytes, CancellationToken token) =>
+        Task.FromResult(ReadBounded(name, maxBytes));
 
     /// <summary>
     /// Replaces the document atomically. <see cref="AuthorityCommittedException"/> means the

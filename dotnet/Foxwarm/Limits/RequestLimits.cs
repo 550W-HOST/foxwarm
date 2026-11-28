@@ -31,16 +31,15 @@ internal static class RequestLimits
         using var socket = admission.WebSockets.TryOpen();
         if (socket is null)
         {
-            await RefuseAsync(
-                context,
-                TimeSpan.FromSeconds(5),
-                "Too many open connections. Close a tab or another client and try again."
-            );
+            await RefuseConnectionAsync(context);
             return;
         }
         // The lease ends with the request, which an accepted WebSocket keeps open.
         await next();
     }
+
+    internal static Task RefuseConnectionAsync(HttpContext context) => RefuseAsync(context, TimeSpan.FromSeconds(5),
+        "Too many open connections. Close a tab or another client and try again.");
 
     private static Task RefuseAsync(HttpContext context, TimeSpan retryAfter, string error)
     {

@@ -93,3 +93,5 @@ Unified edit and old/new resident compatibility follow [D-node-thread-unified-ed
 ### D-mcp-inbound-http-transport
 
 [2026-09-19] Use the pinned MCP SDK's stateful Streamable HTTP transport on the existing listener (`ModelContextProtocol.Core` `StreamableHttpServerTransport` in managed Main). Authenticate each HTTP request, fence transport handles to verified external identity and retain an ephemeral external context; neither ClientInfo nor the session header conveys internal Agent or Session authority. Start HTTP/Node bootstrap/WS if WebUI, Trigger or inbound MCP is enabled; create WebUIChannel only for WebUI/Trigger. The transport is bounded and in-memory, not a durable operation platform. The approved callable outbound MCP surface is owned by [D-dispatch-mcp-inbound-bridge](../threads/tool-dispatch-mcp.md#d-dispatch-mcp-inbound-bridge).
+
+A standalone GET can attach once per initialized context (a duplicate gets 409); the runtime admits 32 contexts by default. These bounds are independent of the Session SSE and WebSocket lifetime allowance.

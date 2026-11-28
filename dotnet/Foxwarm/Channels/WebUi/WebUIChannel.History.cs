@@ -43,9 +43,12 @@ internal sealed partial class WebUIChannel
                         return Results.NotFound(new JsonObject { ["error"] = "Session not found" });
                     parent = use.Owner;
                     var child = await sessions.ForkAsync(parent, SessionWait.Text(body["suffix"]));
-                    return Results.Ok(
-                        new JsonObject { ["success"] = true, ["newSessionId"] = child.Id }
-                    );
+                    return Forked(child.Id);
+                }
+                catch (CommittedSessionCreationException error) when (error.SessionId is { } childId
+                    && error.InnerException is Foxwarm.Limits.TenantLimitException { Limit: "hotOwnerBytes" })
+                {
+                    return Forked(childId);
                 }
                 catch (CommittedSessionCreationException error)
                 {
@@ -63,6 +66,9 @@ internal sealed partial class WebUIChannel
                 {
                     return Results.BadRequest(new JsonObject { ["error"] = error.Message });
                 }
+
+                static IResult Forked(string childId) => Results.Ok(
+                    new JsonObject { ["success"] = true, ["newSessionId"] = childId });
             }
         );
         app.MapGet(

@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.Text;
+using Foxwarm.Net;
 using System.Text.Json.Nodes;
 
 namespace Foxwarm.Models;
@@ -97,12 +97,7 @@ internal static class OpenAIHttp
         CancellationToken cancellationToken
     )
     {
-        await using var stream = await content
-            .ReadAsStreamAsync(cancellationToken)
-            .ConfigureAwait(false);
-        using var buffer = new MemoryStream();
-        await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+        return await BoundedResponse.ReadTextAsync(content, BoundedResponse.ErrorBytes, "model", cancellationToken);
     }
 
     internal static bool HasMeaningfulAssistant(JsonObject? assistant) =>

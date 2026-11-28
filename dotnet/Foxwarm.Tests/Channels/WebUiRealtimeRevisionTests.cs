@@ -12,6 +12,43 @@ namespace Foxwarm.Tests;
 public sealed class WebUiRealtimeRevisionTests
 {
     [Fact]
+    public async Task StalledSocketIsDroppedAndReconnectGetsCurrentToolSnapshot()
+    {
+        using var temp = new TempDirectory();
+        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        await using var manager = new SessionManager(temp.Path + "/data", temp.Path + "/work", options, HostModels.ForTest(options));
+        await manager.LoadAsync();
+        var owner = await manager.CreateNamedAsync("main", "current", null, null);
+        var runtime = new SessionRuntime(manager);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var slow = new ProbeSocket();
+        var paused = Signal();
+        slow.BeforeSend = async (frame, token) =>
+        {
+            if (SessionWait.Text(frame["type"]) == "session-state")
+            {
+                paused.TrySetResult();
+                await Task.Delay(Timeout.Infinite, token);
+            }
+        };
+        var running = new WebUiRealtime(runtime, backlogLimit: 8192).RunAsync(slow, deadline.Token);
+        slow.SetSessionUnion(1, [owner.Id]);
+        await paused.Task.WaitAsync(deadline.Token);
+        owner.BeginTool(new JsonObject { ["id"] = "retained", ["name"] = "read" });
+        owner.Emit(SessionEventKind.CommandReply, new JsonObject { ["text"] = new string('x', 8192) });
+        await running.WaitAsync(TimeSpan.FromSeconds(2));
+        using var fresh = new ProbeSocket();
+        var next = new WebUiRealtime(runtime).RunAsync(fresh, deadline.Token);
+        try
+        {
+            fresh.SetSessionUnion(1, [owner.Id]);
+            await Until(() => fresh.Frames.Any(frame => SessionWait.Text(frame["type"]) == "subscriptions-applied"), deadline.Token);
+            Assert.Contains(fresh.Frames, frame => SessionWait.Text(frame["event"]?["type"]) == "tool-call-snapshot" && frame.ToJsonString().Contains("retained"));
+        }
+        finally { deadline.Cancel(); await next; }
+    }
+
+    [Fact]
     public async Task Tool_call_bootstrap_covers_buffered_lifecycle_and_reconnects_without_history_payloads()
     {
         using var temp = new TempDirectory();

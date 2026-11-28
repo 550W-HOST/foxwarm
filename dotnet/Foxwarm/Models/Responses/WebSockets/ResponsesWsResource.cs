@@ -264,6 +264,14 @@ internal sealed class ResponsesWsResource(
                         Abort("upstream-close");
                     break;
                 }
+                if (message.Length + result.Count > HostedResponsesTools.MaxWireEventBytes)
+                    throw Net.BoundedResponse.TooLarge("model", "event", HostedResponsesTools.MaxWireEventBytes);
+                lock (gate)
+                {
+                    frameBytes += result.Count;
+                    if (frameBytes > HostedResponsesTools.MaxWireResponseBytes)
+                        throw Net.BoundedResponse.TooLarge("model", "body", HostedResponsesTools.MaxWireResponseBytes);
+                }
                 message.Write(buffer, 0, result.Count);
                 if (!result.EndOfMessage)
                     continue;
@@ -283,7 +291,6 @@ internal sealed class ResponsesWsResource(
                 {
                     firstFrame ??= receivedAt;
                     frames++;
-                    frameBytes += Encoding.UTF8.GetByteCount(text);
                 }
                 active.RawFrame(text);
                 JsonObject input;

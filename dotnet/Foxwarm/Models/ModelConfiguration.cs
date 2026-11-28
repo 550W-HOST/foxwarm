@@ -63,7 +63,11 @@ internal sealed partial class ModelConfiguration
     internal JsonObject ConfigDiagnostics()
     {
         var raw = ReadCurrentAppRaw();
-        var current = ConfigurationYaml.Parse(raw, "app config");
+        return ConfigDiagnostics(raw, ConfigurationYaml.Parse(raw, "app config"));
+    }
+
+    private JsonObject ConfigDiagnostics(string raw, JsonObject current)
+    {
         AppConfigurationRules.Validate(current);
         var configured = current["channels"] as JsonObject ?? new JsonObject();
         return new JsonObject
@@ -90,12 +94,12 @@ internal sealed partial class ModelConfiguration
         ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config")["channels"] as JsonObject
         ?? new JsonObject();
 
-    internal JsonArray ChannelDiagnostics(bool webUiRunning)
+    internal JsonArray ChannelDiagnostics(bool webUiRunning, JsonObject? parsedApp = null)
     {
-        if (ManagedChannels is { } runtime)
-            return runtime.Statuses(webUiRunning);
-        var current = ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config");
+        var current = parsedApp ?? ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config");
         var channels = current["channels"] as JsonObject ?? new JsonObject();
+        if (ManagedChannels is { } runtime)
+            return runtime.Statuses(channels, webUiRunning);
         var result = new JsonArray();
         foreach (var (channelId, raw) in channels)
         {
@@ -253,12 +257,12 @@ internal sealed partial class ModelConfiguration
             return Capture(ReadCurrentModelsRaw());
     }
 
-    internal Task<HostModels> CaptureAsync() => gate.HoldAsync(async () =>
+    internal Task<HostModels> CaptureAsync(CancellationToken token = default) => gate.HoldAsync(async () =>
     {
-        var bytes = await Documents.ReadAsync(ConfigDocumentName.Models, CancellationToken.None).ConfigureAwait(false);
+        var bytes = await Documents.ReadAsync(ConfigDocumentName.Models, token).ConfigureAwait(false);
         var raw = bytes is null ? TemplateText() : ConfigDocumentText.Decode(bytes);
         return gate.InBody(() => Capture(raw));
-    });
+    }, token);
 
     private HostModels Capture(string? raw)
     {
@@ -439,88 +443,99 @@ internal sealed partial class ModelConfiguration
 
     internal JsonObject Diagnostics()
     {
-        using (gate.Enter())
+        using (gate.Enter()) return Diagnostics(ReadInstalledModelsText());
+    }
+
+    internal Task<(JsonObject Models, JsonObject Config, JsonArray Channels)> SetupStatusAsync(CancellationToken token) =>
+        gate.HoldAsync(async () =>
         {
-            var installed = ReadInstalledModelsText();
-            var exists = installed is not null;
-            var raw = installed ?? "";
-            var parsed = ConfigurationYaml.Parse(raw, "models config");
-            var providers =
-                (parsed["providers"] ?? parsed["models"]) as JsonObject ?? new JsonObject();
-            var defaultModel = SessionWait.Text(parsed["default"]);
-            var placeholder = new JsonArray();
-            var drafts = new JsonArray();
-            foreach (var (key, value) in providers)
-            {
-                var config = value is JsonObject obj
-                    ? obj
-                    : new JsonObject
-                    {
-                        ["providerType"] = "session-hash",
-                        ["targets"] = new JsonArray(SessionWait.Text(value)?.Trim()),
-                    };
-                var type =
-                    HostModels.Text(config, "providerType")
-                    ?? HostModels.Text(config, "provider")
-                    ?? "openai-completions";
-                var virtualModel = type is "session-hash" or "failover";
-                var secret = SessionWait.Text(config["apiKey"]) ?? "";
-                if (!virtualModel && ModelApiKeys.IsPlaceholder(secret))
-                    placeholder.Add((System.Text.Json.Nodes.JsonNode?)(key));
-                var members =
-                    config["models"] as JsonArray
-                    ?? config["model"] as JsonArray
-                    ?? (
-                        config["model"] is not null
-                            ? new JsonArray(config["model"]!.DeepClone())
-                            : new JsonArray()
-                    );
-                drafts.Add(
-                    new JsonObject
-                    {
-                        ["id"] = key,
-                        ["providerType"] = type,
-                        ["isVirtual"] = virtualModel,
-                        ["baseUrl"] = config["baseUrl"]?.DeepClone() ?? JsonValue.Create(""),
-                        ["apiKey"] = secret,
-                        ["models"] = string.Join(
-                            "\n",
-                            members
-                                .Select(member =>
-                                    SessionWait.Text(member) ?? SessionWait.Text(member?["id"])
-                                )
-                                .Where(id => !string.IsNullOrWhiteSpace(id))
-                        ),
-                        ["targets"] = config["targets"] is JsonArray targets
-                            ? targets.DeepClone()
-                            : new JsonArray(),
-                        ["failureThreshold"] =
-                            config["failureThreshold"]?.DeepClone()
-                            ?? (type == "failover" ? JsonValue.Create(5) : null),
-                        ["cooldownMs"] =
-                            config["cooldownMs"]?.DeepClone()
-                            ?? (type == "failover" ? JsonValue.Create(600000) : null),
-                        ["defaultModel"] =
-                            defaultModel?.StartsWith(key + "/", StringComparison.Ordinal) == true
-                                ? defaultModel[(key.Length + 1)..]
-                                : "",
-                    }
+            var models = await Documents.ReadAsync(ConfigDocumentName.Models, token).ConfigureAwait(false);
+            var appBytes = await Documents.ReadAsync(ConfigDocumentName.Config, token).ConfigureAwait(false);
+            var raw = appBytes is null ? "" : ConfigDocumentText.Decode(appBytes);
+            var parsed = ConfigurationYaml.Parse(raw, "app config");
+            return (Diagnostics(models is null ? null : ConfigDocumentText.Decode(models)), ConfigDiagnostics(raw, parsed), ChannelDiagnostics(true, parsed));
+        }, token);
+
+    private JsonObject Diagnostics(string? installed)
+    {
+        var exists = installed is not null;
+        var raw = installed ?? "";
+        var parsed = ConfigurationYaml.Parse(raw, "models config");
+        var providers =
+            (parsed["providers"] ?? parsed["models"]) as JsonObject ?? new JsonObject();
+        var defaultModel = SessionWait.Text(parsed["default"]);
+        var placeholder = new JsonArray();
+        var drafts = new JsonArray();
+        foreach (var (key, value) in providers)
+        {
+            var config = value is JsonObject obj
+                ? obj
+                : new JsonObject
+                {
+                    ["providerType"] = "session-hash",
+                    ["targets"] = new JsonArray(SessionWait.Text(value)?.Trim()),
+                };
+            var type =
+                HostModels.Text(config, "providerType")
+                ?? HostModels.Text(config, "provider")
+                ?? "openai-completions";
+            var virtualModel = type is "session-hash" or "failover";
+            var secret = SessionWait.Text(config["apiKey"]) ?? "";
+            if (!virtualModel && ModelApiKeys.IsPlaceholder(secret))
+                placeholder.Add((System.Text.Json.Nodes.JsonNode?)(key));
+            var members =
+                config["models"] as JsonArray
+                ?? config["model"] as JsonArray
+                ?? (
+                    config["model"] is not null
+                        ? new JsonArray(config["model"]!.DeepClone())
+                        : new JsonArray()
                 );
-            }
-            return new JsonObject
-            {
-                ["path"] = ActivePath,
-                ["templatePath"] = TemplatePath,
-                ["exists"] = exists,
-                ["providerCount"] = providers.Count,
-                ["defaultModel"] = defaultModel,
-                ["rawYaml"] = raw,
-                ["providers"] = drafts,
-                ["hasPlaceholderSecrets"] = placeholder.Count > 0,
-                ["placeholderProviders"] = placeholder,
-                ["oobe"] = !exists,
-            };
+            drafts.Add(
+                new JsonObject
+                {
+                    ["id"] = key,
+                    ["providerType"] = type,
+                    ["isVirtual"] = virtualModel,
+                    ["baseUrl"] = config["baseUrl"]?.DeepClone() ?? JsonValue.Create(""),
+                    ["apiKey"] = secret,
+                    ["models"] = string.Join(
+                        "\n",
+                        members
+                            .Select(member =>
+                                SessionWait.Text(member) ?? SessionWait.Text(member?["id"])
+                            )
+                            .Where(id => !string.IsNullOrWhiteSpace(id))
+                    ),
+                    ["targets"] = config["targets"] is JsonArray targets
+                        ? targets.DeepClone()
+                        : new JsonArray(),
+                    ["failureThreshold"] =
+                        config["failureThreshold"]?.DeepClone()
+                        ?? (type == "failover" ? JsonValue.Create(5) : null),
+                    ["cooldownMs"] =
+                        config["cooldownMs"]?.DeepClone()
+                        ?? (type == "failover" ? JsonValue.Create(600000) : null),
+                    ["defaultModel"] =
+                        defaultModel?.StartsWith(key + "/", StringComparison.Ordinal) == true
+                            ? defaultModel[(key.Length + 1)..]
+                            : "",
+                }
+            );
         }
+        return new JsonObject
+        {
+            ["path"] = ActivePath,
+            ["templatePath"] = TemplatePath,
+            ["exists"] = exists,
+            ["providerCount"] = providers.Count,
+            ["defaultModel"] = defaultModel,
+            ["rawYaml"] = raw,
+            ["providers"] = drafts,
+            ["hasPlaceholderSecrets"] = placeholder.Count > 0,
+            ["placeholderProviders"] = placeholder,
+            ["oobe"] = !exists,
+        };
     }
 
     internal string SafeAppError(Exception error) =>
@@ -528,7 +543,15 @@ internal sealed partial class ModelConfiguration
             ? error.Message
             : "Configuration operation failed.";
 
-    internal string SafeError(Exception error, JsonObject? incoming = null)
+    internal async Task<string> SafeStatusErrorAsync(Exception error, CancellationToken token)
+    {
+        if (error is InvalidDataException && error.Message.Contains("YAML at line", StringComparison.Ordinal)) return error.Message;
+        try { return SafeError(error, models: await CaptureAsync(token)); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch { return "Models configuration validation failed."; }
+    }
+
+    internal string SafeError(Exception error, JsonObject? incoming = null, HostModels? models = null)
     {
         var message = error is InvalidDataException or AuthorityCommittedException
             ? error.Message
@@ -537,7 +560,7 @@ internal sealed partial class ModelConfiguration
             return message;
         try
         {
-            var secrets = Capture()
+            var secrets = (models ?? Capture())
                 .All.SelectMany(model =>
                     new[] { model.Token }.Concat(
                         (

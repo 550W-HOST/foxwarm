@@ -14,11 +14,11 @@ internal sealed partial class WebUIChannel
             return;
         app.MapGet(
             "/api/setup/status",
-            () =>
+            async (CancellationToken token) =>
             {
                 try
                 {
-                    var models = configuration.Diagnostics();
+                    var (models, config, channels) = await configuration.SetupStatusAsync(token);
                     var claudeUnavailable = Sessions
                         .ClaudeRuntimeConfiguration.Capture(configuration.AppConfiguration)
                         .UnavailableReason(sessions);
@@ -27,8 +27,8 @@ internal sealed partial class WebUIChannel
                         {
                             ["oobe"] = models["oobe"]!.DeepClone(),
                             ["models"] = models,
-                            ["config"] = configuration.ConfigDiagnostics(),
-                            ["channels"] = configuration.ChannelDiagnostics(webUiRunning: true),
+                            ["config"] = config,
+                            ["channels"] = channels,
                             ["capabilities"] = new JsonObject
                             {
                                 ["historySearch"] = new JsonObject
@@ -55,10 +55,11 @@ internal sealed partial class WebUIChannel
                         }
                     );
                 }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                 catch (Exception error)
                 {
                     return Results.Json(
-                        new JsonObject { ["error"] = configuration.SafeError(error) },
+                        new JsonObject { ["error"] = await configuration.SafeStatusErrorAsync(error, token) },
                         statusCode: 500
                     );
                 }

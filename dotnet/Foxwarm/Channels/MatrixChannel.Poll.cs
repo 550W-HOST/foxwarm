@@ -175,7 +175,7 @@ internal sealed partial class MatrixChannel
                 // SDK sync keepalives are deliberately unauthenticated.
                 using var response = await http.GetAsync(
                     new Uri(homeserver.ToString().TrimEnd('/') + "/_matrix/client/versions"),
-                    timeout.Token
+                    HttpCompletionOption.ResponseHeadersRead, timeout.Token
                 );
                 if (response.IsSuccessStatusCode)
                     return;

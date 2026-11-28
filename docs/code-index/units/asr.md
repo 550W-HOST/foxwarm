@@ -16,6 +16,8 @@ Browser upgrade follows normal host authentication. Only configured upstream Aut
 
 Callers and adjacent boundaries: WebUIChannel setup/audio routes.
 
+The proxy queues at most 128 eight-KiB browser fragments (1 MiB), including while the service WebSocket connects. A full queue backpressures the browser during the handshake and after connection, with cancellation and a five-second no-progress deadline so a blocked writer cannot keep a disconnected browser alive. A whole recording is not subject to the queue allowance.
+
 ## Tests
 
 `AsrRoutesTests` and partial fixtures use the real host routes and loopback peers: ordinary fragmented PCM/start/ready/partial/stop/final, opaque non-JSON and binary extensions, traffic beyond the removed audio/output caps, continued traffic after final, configured headers, authentication, rejection/redirect, peer closure, cancellation during connection and a delayed final beyond the former cutoff. Rejection and service-close tests complete the browser acknowledgement; a silent browser control verifies request release without a close response. `AsrRoutesTests.MessageBoundary.cs` covers both directions at 100 MiB minus one, exactly 100 MiB and plus one, single/fragmented messages, an empty final fragment, multiple valid messages exceeding 100 MiB in aggregate, and ordered traffic queued before connection. HTTP transcription coverage remains separate. `mainHostAsr.e2e.mjs` qualifies the built App with its Composer recording controller and required AbortSignal, using fake microphone PCM through an owned TLS-prefix proxy and scripted service; it does not qualify model inference.

@@ -115,6 +115,20 @@ public sealed class ResponsesEventAccumulator
     private readonly SortedDictionary<int, JsonObject> outputItems = new();
     private readonly Dictionary<(int Output, int Summary), string> summaryParts = new();
     private JsonObject? completedResponse;
+    private int remainingSparseSlots = 4096;
+    private void GrowTo(JsonArray array, int index)
+    {
+        var missing = (long)index - array.Count;
+        if (index < 0 || missing > remainingSparseSlots)
+        {
+            MainLog.Diagnostic("Responses stream exceeded its sparse array position allowance.", failure: true);
+            throw new InvalidDataException("The model's response was too large to process.");
+        }
+        if (missing < 0) return;
+        remainingSparseSlots -= (int)missing;
+        while (array.Count <= index) array.Add(null);
+    }
+
     private string lastSummaryText = "";
 
     public ResponsesEventAccumulator(ResponsesStreamCallbacks? callbacks = null) =>
@@ -256,8 +270,7 @@ public sealed class ResponsesEventAccumulator
                             annotationPart["annotations"] = annotations;
                         }
                         var index = Int(eventNode, "annotation_index") ?? annotations.Count;
-                        while (annotations.Count <= index)
-                            annotations.Add(null);
+                        GrowTo(annotations, index);
                         annotations[index] = annotation.DeepClone();
                         EmitProgress();
                     }
@@ -463,8 +476,7 @@ public sealed class ResponsesEventAccumulator
             content = new JsonArray();
             item["content"] = content;
         }
-        while (content.Count <= contentIndex)
-            content.Add(null);
+        GrowTo(content, contentIndex);
         content[contentIndex] = MergeContent(content[contentIndex] as JsonObject, incoming);
         return content[contentIndex] as JsonObject;
     }
@@ -834,7 +846,8 @@ public static class ResponsesSseCollector
     {
         var accumulator = new ResponsesEventAccumulator(callbacks);
         await OpenAISseReader
-            .ReadAsync(stream, cancellationToken, accumulator.Consume, callbacks, ownership)
+            .ReadAsync(stream, cancellationToken, accumulator.Consume, callbacks, ownership,
+                eventBytes: HostedResponsesTools.MaxWireEventBytes, responseBytes: HostedResponsesTools.MaxWireResponseBytes)
             .ConfigureAwait(false);
         return accumulator.CompleteAtEof();
     }

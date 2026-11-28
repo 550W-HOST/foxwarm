@@ -22,24 +22,25 @@ internal sealed class OperatorCeilingDocuments(TenantDb database, TenantProfile 
     /// profile's. Read in one statement, so an override replaced concurrently never mixes with
     /// the profile document.
     /// </summary>
-    public OperatorCeilingDocument? Read() =>
-        database.Read(tx =>
-        {
-            using var command = tx.Command(
-                "SELECT scope, text FROM operator_documents"
-                    + " WHERE (scope = 'tenant' AND tenant_id = $1 AND name = $2)"
-                    + " OR (scope = 'global' AND name = $3)"
-                    + " ORDER BY scope = 'tenant' DESC LIMIT 1",
-                tx.TenantId,
-                TenantDocument,
-                ProfileDocument(profile)
-            );
-            using var reader = command.ExecuteReader();
-            if (!reader.Read())
-                return null;
-            return new OperatorCeilingDocument(
-                reader.GetString(0) == "tenant" ? "tenant" : "profile:" + TenantProfiles.Name(profile),
-                reader.GetString(1)
-            );
-        });
+    private const string Query = "SELECT scope, text FROM operator_documents"
+        + " WHERE (scope = 'tenant' AND tenant_id = $1 AND name = $2)"
+        + " OR (scope = 'global' AND name = $3)"
+        + " ORDER BY scope = 'tenant' DESC LIMIT 1";
+
+    public OperatorCeilingDocument? Read() => database.Read(tx =>
+    {
+        using var command = tx.Command(Query, tx.TenantId, TenantDocument, ProfileDocument(profile));
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? Document(reader) : null;
+    });
+
+    public Task<OperatorCeilingDocument?> ReadAsync(CancellationToken token) => database.ReadAsync(async (tx, cancel) =>
+    {
+        using var command = tx.Command(Query, tx.TenantId, TenantDocument, ProfileDocument(profile));
+        using var reader = await command.ExecuteReaderAsync(cancel).ConfigureAwait(false);
+        return await reader.ReadAsync(cancel).ConfigureAwait(false) ? Document(reader) : null;
+    }, token: token);
+
+    private OperatorCeilingDocument Document(Npgsql.NpgsqlDataReader reader) =>
+        new(reader.GetString(0) == "tenant" ? "tenant" : "profile:" + TenantProfiles.Name(profile), reader.GetString(1));
 }

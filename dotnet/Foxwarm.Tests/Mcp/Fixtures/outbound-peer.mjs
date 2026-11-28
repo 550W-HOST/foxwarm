@@ -42,7 +42,7 @@ function result(kind) {
     default: return { content: [text({ kind })] };
   }
 }
-function peer(id, authorization = "", transport, notifications = false, delayedList = false) {
+function peer(id, authorization = "", transport, notifications = false, delayedList = false, repeatedCursor = false) {
   const invalidResults = new Map();
   if (transport) {
     const send = transport.send.bind(transport);
@@ -60,8 +60,10 @@ function peer(id, authorization = "", transport, notifications = false, delayedL
     };
   }
   const server = new Server({ name: 'outbound-qualification-peer', version: '1' }, { capabilities: { tools: {}, ...(notifications ? { experimental: { 'foxwarm/session-notifications': { version: 1 } } } : {}) } });
+  let pages = 0;
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     await record({ kind: 'list', id });
+    if (repeatedCursor && ++pages <= 2) return { tools: [], nextCursor: 'again' };
     if (delayedList && !delayedListUsed) {
       delayedListUsed = true;
       await new Promise(resolve => setTimeout(resolve, 61000));
@@ -172,7 +174,7 @@ if (mode === 'stdio') {
       if (!bound && req.method === 'POST' && body?.method === 'initialize') {
         const session = randomUUID();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => session });
-        const server = peer(session, url.searchParams.get("descriptorSecret") ?? req.headers.authorization ?? "", transport, url.searchParams.has('notifications'), url.searchParams.has('delayedList'));
+        const server = peer(session, url.searchParams.get("descriptorSecret") ?? req.headers.authorization ?? "", transport, url.searchParams.has('notifications'), url.searchParams.has('delayedList'), url.searchParams.has('repeatCursor'));
         bound = { transport, server };
         connections.set(session, bound);
         await server.connect(transport);

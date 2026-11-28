@@ -233,21 +233,6 @@ internal sealed class HotOwnerBudget : IDisposable
     /// <summary>An owner of this runtime may have become releasable (a turn ended): waiters look again.</summary>
     internal void OwnerMayBeIdle() => Signal();
 
-    /// <summary>
-    /// Charges an owner that already exists (a Session just created), then releases idle owners
-    /// while the budgets are exceeded. Never waits or fails.
-    /// </summary>
-    internal Charge Force(long bytes)
-    {
-        Charge charge;
-        lock (Gate)
-            charge = Add(bytes);
-        for (var attempt = 0; attempt < ReleaseAttempts && Over(0); attempt++)
-            if (!ReleaseFor(0))
-                break;
-        return charge;
-    }
-
     private object Gate => replica?.Gate ?? tenant.Gate;
 
     private bool TryCharge(long bytes, out Charge charge)

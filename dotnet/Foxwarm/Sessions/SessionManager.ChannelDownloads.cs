@@ -14,8 +14,6 @@ internal sealed partial class SessionManager
     // is removed before the ordinary file-size check runs on the plaintext.
     internal async Task<byte[]> ReadChannelBodyAsync(HttpContent body, CancellationToken token, int padding = 0)
     {
-        if (Capabilities.Limits is null)
-            return await body.ReadAsByteArrayAsync(token);
         var cap = ReceivedFileLimit + padding;
         if (body.Headers.ContentLength is { } known && known > cap)
             throw new ReceivedFileTooLarge(padding == 0 ? known : null);

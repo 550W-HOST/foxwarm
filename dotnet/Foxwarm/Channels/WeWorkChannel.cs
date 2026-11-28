@@ -312,13 +312,14 @@ internal sealed partial class WeWorkChannel : IManagedChannel
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(timeoutMs);
-        using var response = await http.PostAsync(url, content, timeout.Token);
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
         response.EnsureSuccessStatusCode();
-        var bytes = await response.Content.ReadAsByteArrayAsync(timeout.Token);
+        var text = await Net.BoundedResponse.ReadTextAsync(response.Content, Net.BoundedResponse.JsonBytes, "WeWork", timeout.Token);
         // Axios leaves non-JSON successful bodies as strings. Missing errcode is accepted only on response_url.
         try
         {
-            return JsonNode.Parse(bytes) as JsonObject ?? new();
+            return JsonNode.Parse(text) as JsonObject ?? new();
         }
         catch (System.Text.Json.JsonException)
         {

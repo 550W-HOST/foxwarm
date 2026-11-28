@@ -184,6 +184,12 @@ internal sealed partial class McpClient
             external?.Require();
             return await InvokeAsync(connection.Client, request.Token);
         }
+        catch (Exception) when (!token.IsCancellationRequested && entry.Receiver.StreamLimitFailure is { } tooLarge)
+        {
+            // The legacy SDK reports a failed background event stream as a closed connection.
+            cancelled = true;
+            throw new InvalidOperationException(tooLarge.Message, tooLarge);
+        }
         catch (OperationCanceledException)
         {
             cancelled = true;
@@ -525,7 +531,7 @@ internal sealed partial class McpClient
             };
             HttpMessageHandler Observe(HttpMessageHandler inner) =>
                 new ReceiveTransport.Handler(
-                    entry.Receiver,
+                    server, MaxResponseBytes, entry.Receiver,
                     () =>
                     {
                         lock (poolGate)

@@ -19,6 +19,8 @@ Implements the used unencrypted Matrix transport and Source Weixin text/login su
 - `WeixinInbound.Parts` selects the first text or voice transcription, preserves the actual quoted-text rules and exact unsupported-media placeholders. These strings are ordinary untrusted User content. `WeixinApi.CacheContext` runs before Router authorization and shares a per-user map across configured instances and reloads for one Main lifetime. It is neither instance-keyed nor persisted; fresh Main requires inbound context again, and missing context fails explicitly.
 - `StartLoginAsync`/`WaitLoginAsync` own in-memory five-minute QR sessions, fresh-key reuse/force, default bot type/base URL, optional route tag, 35-second status fetches, `scaned` wire spelling, confirmation token/owner/returned base URL, expiration and caller deadline behavior. A short caller deadline does not abort a status fetch already in progress. Login state is not a persistent recovery service.
 
+Matrix JSON is capped at 32 MiB to allow multi-room syncs. Weixin text and QR JSON allow 8 MiB for batches and embedded QR data. Both limit errors to 1 MiB for structured diagnostics. Matrix streams media under the existing received-file limit (1 GiB in file mode). Keepalives consume only headers.
+
 ## Configuration, Setup and lifecycle ordering
 
 The actual authenticated, deployment-prefixed `/api/setup/weixin/login/start` and `/wait` routes reuse the existing HTTP/Setup access owner. Anonymous and scoped identities cannot start a login. Setup selects the first configured Weixin entry unless explicitly given a channel ID; the command selects the type-named default before the first matching entry.

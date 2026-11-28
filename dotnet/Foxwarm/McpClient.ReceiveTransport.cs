@@ -11,6 +11,7 @@ internal sealed partial class McpClient
         private readonly object gate = new();
         private long generation;
         private bool receiving;
+        internal volatile InvalidDataException? StreamLimitFailure;
         private string[] credentials = [];
         internal string[] Credentials
         {
@@ -82,7 +83,7 @@ internal sealed partial class McpClient
         }
 
         internal sealed class Handler(
-            ReceiveTransport observer,
+            string server, int maxResponseBytes, ReceiveTransport observer,
             Action lost,
             HttpMessageHandler inner,
             bool oauth,
@@ -124,49 +125,50 @@ internal sealed partial class McpClient
                     )
                 )
                     lost();
-                if (!get)
-                    return response;
-                if (
-                    !response.IsSuccessStatusCode
-                    || response.Content.Headers.ContentType?.MediaType != "text/event-stream"
-                )
+                try
                 {
-                    observer.Fail();
-                    return response;
+                    var content = response.Content;
+                    bool sse = response.IsSuccessStatusCode && string.Equals(content.Headers.ContentType?.MediaType,
+                        "text/event-stream", StringComparison.OrdinalIgnoreCase);
+                    long? captured = null;
+                    if (get && sse)
+                    {
+                        var selected = currentCredentials().Concat(new[] { request.Headers.Authorization?.Parameter,
+                            response.RequestMessage?.Headers.Authorization?.Parameter }.OfType<string>())
+                            .Where(value => value.Length != 0).Distinct(StringComparer.Ordinal).ToArray();
+                        captured = observer.Open(selected);
+                    }
+                    else if (get) observer.Fail();
+                    var body = await content.ReadAsStreamAsync(token);
+                    var limit = response.IsSuccessStatusCode ? maxResponseBytes : Math.Min(maxResponseBytes, Net.BoundedResponse.ErrorBytes);
+                    var subscription = sse && request.Method == HttpMethod.Get;
+                    var guard = new McpResponseBudget(server, limit, sse, subscription,
+                        subscription ? error => observer.StreamLimitFailure = error : null);
+                    var replacement = new StreamContent(new ObservedStream(body,
+                        captured is { } version ? () => observer.End(version) : null, content, guard));
+                    foreach (var header in content.Headers)
+                        if (!header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                            replacement.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    response.Content = replacement;
                 }
-                var content = response.Content;
-                var body = await content.ReadAsStreamAsync(token);
-                var selected = currentCredentials()
-                    .Concat(
-                        new[]
-                        {
-                            request.Headers.Authorization?.Parameter,
-                            response.RequestMessage?.Headers.Authorization?.Parameter,
-                        }
-                            .Where(value => !string.IsNullOrEmpty(value))
-                            .Select(value => value!)
-                    )
-                    .Distinct(StringComparer.Ordinal)
-                    .ToArray();
-                var captured = observer.Open(selected);
-                var replacement = new StreamContent(
-                    new ObservedStream(body, () => observer.End(captured), content)
-                );
-                foreach (var header in content.Headers)
-                    replacement.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                response.Content = replacement;
+                catch
+                {
+                    if (get) observer.Fail();
+                    response.Dispose();
+                    throw;
+                }
                 return response;
             }
         }
 
-        private sealed class ObservedStream(Stream body, Action ended, HttpContent content) : Stream
+        private sealed class ObservedStream(Stream body, Action? ended, HttpContent content, McpResponseBudget budget) : Stream
         {
             private int closed;
 
             private void End()
             {
                 if (Interlocked.Exchange(ref closed, 1) == 0)
-                    ended();
+                    ended?.Invoke();
             }
 
             public override async ValueTask<int> ReadAsync(
@@ -177,8 +179,8 @@ internal sealed partial class McpClient
                 try
                 {
                     var count = await body.ReadAsync(buffer, cancellationToken);
-                    if (count == 0)
-                        End();
+                    budget.Read(buffer.Span[..count]);
+                    if (count == 0) End();
                     return count;
                 }
                 catch
@@ -200,8 +202,8 @@ internal sealed partial class McpClient
                 try
                 {
                     var read = body.Read(buffer, offset, count);
-                    if (read == 0)
-                        End();
+                    budget.Read(buffer.AsSpan(offset, read));
+                    if (read == 0) End();
                     return read;
                 }
                 catch

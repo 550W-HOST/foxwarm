@@ -8,7 +8,7 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Channels.WebUi;
 
 /// <summary>Revisioned list/session subscription union, installed before acknowledged snapshots and buffered events.</summary>
-internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs = null)
+internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs = null, int backlogLimit = 64 * 1024 * 1024)
 {
     // Match JsonNode.ToJsonString's writer depth, not the serializer's 64-level default.
     private static readonly JsonSerializerOptions SendJson = new()
@@ -101,7 +101,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         var listActive = false;
         var initializing = false;
         var closing = false;
-        var pending = new List<(JsonObject Data, SessionOwner? Owner, string? Projection)>();
+        var pending = new List<(JsonObject Data, SessionOwner? Owner, string? Projection, int Bytes)>();
+        long pendingBytes = 0;
         long queuedBytes = 0;
         string? logsId = null;
         Action? stopLogs = null;
@@ -113,10 +114,22 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             string? LogsId,
             string? Projection
         )>();
+        bool Fits(long bytes)
+        {
+            if (bytes <= backlogLimit) return true;
+            _ = lifetime.CancelAsync();
+            return false;
+        }
+        static int Size(JsonObject data) => 96 + Encoding.UTF8.GetByteCount(data.ToJsonText());
         void Queue(long? expected, JsonObject data, string? topic = null, string? projection = null)
         {
-            var bytes = Encoding.UTF8.GetByteCount(data.ToJsonText());
-            Interlocked.Add(ref queuedBytes, bytes);
+            if (lifetime.IsCancellationRequested) return;
+            var bytes = Size(data);
+            if (!Fits(Interlocked.Add(ref queuedBytes, bytes) + Interlocked.Read(ref pendingBytes)))
+            {
+                Interlocked.Add(ref queuedBytes, -bytes);
+                return;
+            }
             if (!output.Writer.TryWrite((expected, data, bytes, topic, projection)))
                 Interlocked.Add(ref queuedBytes, -bytes);
         }
@@ -150,8 +163,11 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                         lifetime.Cancel();
                         return;
                     }
+                    var bytes = Size(data);
+                    if (lifetime.IsCancellationRequested || !Fits(pendingBytes + bytes + Interlocked.Read(ref queuedBytes))) return;
+                    pendingBytes += bytes;
                     var id = SessionCatalog.Text(data["sessionId"]);
-                    pending.Add((data, id is null ? null : runtime.Owner(id), projection));
+                    pending.Add((data, id is null ? null : runtime.Owner(id), projection, bytes));
                 }
                 else
                     Queue(revision, data, projection: projection);
@@ -248,7 +264,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                             item.Data["sessions"] = new JsonArray(rows[0]);
                             // The row now occupies the queue until its send finishes.
                             accountedBytes = Encoding.UTF8.GetByteCount(item.Data.ToJsonText());
-                            Interlocked.Add(ref queuedBytes, accountedBytes - item.Bytes);
+                            if (!Fits(Interlocked.Add(ref queuedBytes, accountedBytes - item.Bytes) + Interlocked.Read(ref pendingBytes))) return;
                         }
                         catch (Exception error)
                         {
@@ -415,8 +431,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     }
                     requestedLogs = logRequest;
                     revision = requested;
-                    if (!initializing)
-                        pending.Clear();
+                    if (!initializing) { pending.Clear(); pendingBytes = 0; }
                     initializing = true;
                     sessionIds = requestedSessions
                         .Select(id =>
@@ -429,6 +444,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     listActive = active;
                     // A superseding initialization carries only still-subscribed events.
                     pending.RemoveAll(item => !Subscribed(item.Data, item.Projection));
+                    pendingBytes = pending.Sum(item => (long)item.Bytes);
                 }
                 CancellationTokenSource? previous;
                 lock (gate)
@@ -707,6 +723,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 {
                     if (revision != requested || attempt.IsCancellationRequested)
                         return;
+                    pendingBytes = 0; // Transfer the retained events to the sender under the same gate.
                     foreach (var item in pending)
                         if (
                             Subscribed(item.Data, item.Projection)
@@ -783,8 +800,11 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 Foxwarm.Images.ImageTransport.Project(data),
                 SendJson
             );
-            if (!queued)
-                Interlocked.Add(ref queuedBytes, bytes.Length);
+            if (!queued && !Fits(Interlocked.Add(ref queuedBytes, bytes.Length) + Interlocked.Read(ref pendingBytes)))
+            {
+                Interlocked.Add(ref queuedBytes, -bytes.Length);
+                return;
+            }
             try
             {
                 await sendGate.WaitAsync(lifetime.Token);

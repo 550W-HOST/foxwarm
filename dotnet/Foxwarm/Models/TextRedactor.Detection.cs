@@ -136,7 +136,7 @@ internal sealed partial class TextRedactor
                     "Bearer",
                     options.ApiKey
                 );
-            using var response = await http.SendAsync(request, deadline.Token)
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token)
                 .ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
@@ -149,7 +149,7 @@ internal sealed partial class TextRedactor
                     kind: TextRedactionFailureKind.ForStatus(status)
                 );
             }
-            var result = JsonNode.Parse(await response.Content.ReadAsStringAsync(deadline.Token));
+            var result = JsonNode.Parse(await Net.BoundedResponse.ReadTextAsync(response.Content, Net.BoundedResponse.JsonBytes, "text detection", deadline.Token));
             if (
                 result is not JsonObject data
                 || SessionWait.Text(data["offset_unit"]) != "utf8_bytes"
@@ -215,6 +215,10 @@ internal sealed partial class TextRedactor
                 true,
                 kind: TextRedactionFailureKind.Connection
             );
+        }
+        catch (InvalidDataException error)
+        {
+            throw new TextRedactionException(error.Message, false, kind: TextRedactionFailureKind.InvalidResponse);
         }
         catch (IOException)
         {

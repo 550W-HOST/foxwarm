@@ -20,9 +20,9 @@ internal sealed class StoreGate
 
     // Waits for the gate without a worker thread; the database also waits asynchronously for
     // its statement slot. A continuation can switch threads before the transaction body runs.
-    internal async Task<T> HoldAsync<T>(Func<Task<T>> operation)
+    internal async Task<T> HoldAsync<T>(Func<Task<T>> operation, CancellationToken token = default)
     {
-        await semaphore.WaitAsync().ConfigureAwait(false);
+        await semaphore.WaitAsync(token).ConfigureAwait(false);
         try
         {
             return await operation().ConfigureAwait(false);

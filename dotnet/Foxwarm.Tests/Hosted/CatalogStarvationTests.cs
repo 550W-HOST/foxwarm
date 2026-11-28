@@ -49,6 +49,44 @@ public sealed class CatalogStarvationTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SetupAndPolicyYieldWhileAnIndependentTenantRemainsResponsive(bool policy)
+    {
+        await using var harness = await HostedRuntimeHarness.CreateAsync();
+        await using var slow = await harness.StartAsync("alpha", maxInFlight: 1);
+        await using var fast = await harness.StartAsync("beta", maxInFlight: 1);
+        var manager = slow.Main.Sessions;
+        var db = ((PostgresSessionAuthorityBackend)manager.Storage.Authority).Database;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = db.ReadAsync(async (_, _) => { entered.SetResult(); await release.Task; return 1; });
+        await entered.Task;
+        manager.Authorization.Invalidate();
+        Task Submit()
+        {
+            if (policy) return manager.Authorization.LoadAsync();
+            var app = slow.Main.App;
+            var endpoint = app.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
+                .Single(item => item.RoutePattern.RawText == "/api/setup/status");
+            var context = new DefaultHttpContext { RequestServices = app.Services };
+            context.SetEndpoint(endpoint);
+            context.Request.Method = "GET";
+            return endpoint.RequestDelegate!(context);
+        }
+        var submitted = Task.Factory.StartNew(Submit, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
+        try
+        {
+            var blocked = await submitted.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(blocked.IsCompleted);
+            using var response = await fast.Client.GetAsync("/api/setup/status").WaitAsync(TimeSpan.FromSeconds(4));
+            response.EnsureSuccessStatusCode();
+            await fast.Main.Sessions.Authorization.LoadAsync().WaitAsync(TimeSpan.FromSeconds(4));
+        }
+        finally { release.TrySetResult(); await holding; await submitted.Unwrap(); }
+    }
+
     [Fact]
     public async Task ConcurrentFullListQueriesCompleteWithTheDefaultStatementCap()
     {
