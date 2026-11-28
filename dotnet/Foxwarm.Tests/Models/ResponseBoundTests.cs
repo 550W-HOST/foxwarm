@@ -15,7 +15,7 @@ public sealed class ResponseBoundTests
         using var decoded = new System.IO.Compression.GZipStream(compressed, System.IO.Compression.CompressionMode.Decompress);
         using var content = new StreamContent(decoded);
         Assert.Null(content.Headers.ContentLength);
-        await Assert.ThrowsAsync<InvalidDataException>(() => Net.BoundedResponse.ReadTextAsync(content, 64, default));
+        await Assert.ThrowsAsync<InvalidDataException>(() => Foxwarm.Net.BoundedResponse.ReadTextAsync(content, 64, "model", default));
     }
 
     [Theory]

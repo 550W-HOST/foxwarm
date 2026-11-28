@@ -89,7 +89,7 @@ internal sealed partial class WeixinApi
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop);
         timeout.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(0, timeoutMs)));
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-        var raw = await Net.BoundedResponse.ReadTextAsync(response.Content, response.IsSuccessStatusCode ? Net.BoundedResponse.JsonBytes : Net.BoundedResponse.ErrorBytes, timeout.Token);
+        var raw = await Net.BoundedResponse.ReadTextAsync(response.Content, response.IsSuccessStatusCode ? Net.BoundedResponse.JsonBytes : Net.BoundedResponse.ErrorBytes, "Weixin", timeout.Token);
         if (!response.IsSuccessStatusCode)
             throw new WeixinHttpException(
                 (int)response.StatusCode,

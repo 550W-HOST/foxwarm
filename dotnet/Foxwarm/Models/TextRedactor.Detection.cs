@@ -149,7 +149,7 @@ internal sealed partial class TextRedactor
                     kind: TextRedactionFailureKind.ForStatus(status)
                 );
             }
-            var result = JsonNode.Parse(await Net.BoundedResponse.ReadTextAsync(response.Content, Net.BoundedResponse.JsonBytes, deadline.Token));
+            var result = JsonNode.Parse(await Net.BoundedResponse.ReadTextAsync(response.Content, Net.BoundedResponse.JsonBytes, "text detection", deadline.Token));
             if (
                 result is not JsonObject data
                 || SessionWait.Text(data["offset_unit"]) != "utf8_bytes"
@@ -216,6 +216,10 @@ internal sealed partial class TextRedactor
                 kind: TextRedactionFailureKind.Connection
             );
         }
+        catch (InvalidDataException error)
+        {
+            throw new TextRedactionException(error.Message, false, kind: TextRedactionFailureKind.InvalidResponse);
+        }
         catch (IOException)
         {
             throw new TextRedactionException(
@@ -226,7 +230,7 @@ internal sealed partial class TextRedactor
         }
         catch (Exception error)
             when (error
-                    is JsonException or InvalidDataException
+                    is JsonException
                         or InvalidOperationException
                         or DecoderFallbackException
                         or EncoderFallbackException

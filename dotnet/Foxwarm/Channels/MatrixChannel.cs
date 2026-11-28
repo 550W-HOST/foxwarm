@@ -382,7 +382,7 @@ internal sealed partial class MatrixChannel : IManagedChannel
         if (localTimeout is { } budget)
             timeout.CancelAfter(budget);
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-        var raw = await Net.BoundedResponse.ReadTextAsync(response.Content, response.IsSuccessStatusCode ? 32 * 1024 * 1024 : Net.BoundedResponse.ErrorBytes, timeout.Token);
+        var raw = await Net.BoundedResponse.ReadTextAsync(response.Content, response.IsSuccessStatusCode ? 32 * 1024 * 1024 : Net.BoundedResponse.ErrorBytes, "Matrix", timeout.Token);
         JsonObject? result = null;
         try
         {

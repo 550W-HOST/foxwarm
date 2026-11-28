@@ -265,12 +265,12 @@ internal sealed class ResponsesWsResource(
                     break;
                 }
                 if (message.Length + result.Count > HostedResponsesTools.MaxWireEventBytes)
-                    throw new InvalidDataException("Model response event exceeds the size limit.");
+                    throw Net.BoundedResponse.TooLarge("model", "event", HostedResponsesTools.MaxWireEventBytes);
                 lock (gate)
                 {
                     frameBytes += result.Count;
                     if (frameBytes > HostedResponsesTools.MaxWireResponseBytes)
-                        throw new InvalidDataException("Model response exceeds the size limit.");
+                        throw Net.BoundedResponse.TooLarge("model", "body", HostedResponsesTools.MaxWireResponseBytes);
                 }
                 message.Write(buffer, 0, result.Count);
                 if (!result.EndOfMessage)

@@ -97,7 +97,7 @@ internal static class OpenAIHttp
         CancellationToken cancellationToken
     )
     {
-        return await BoundedResponse.ReadTextAsync(content, BoundedResponse.ErrorBytes, cancellationToken);
+        return await BoundedResponse.ReadTextAsync(content, BoundedResponse.ErrorBytes, "model", cancellationToken);
     }
 
     internal static bool HasMeaningfulAssistant(JsonObject? assistant) =>

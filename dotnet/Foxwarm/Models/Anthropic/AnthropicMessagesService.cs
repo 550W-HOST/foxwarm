@@ -295,7 +295,7 @@ internal sealed class AnthropicMessagesService(
             var count = await decoded.ReadAsync(bytes, activity.Token);
             if (count == 0) break;
             if (buffer.Length + count > limit)
-                throw new InvalidDataException("Model response exceeds the size limit.");
+                throw Net.BoundedResponse.TooLarge("model", "body", limit);
             activity.CancelAfter(RequestTimeout);
             buffer.Write(bytes, 0, count);
         }

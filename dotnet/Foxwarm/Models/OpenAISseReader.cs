@@ -45,7 +45,7 @@ internal static class OpenAISseReader
         void Add(ReadOnlySpan<byte> part)
         {
             if (pending.Length + part.Length > eventBytes)
-                throw new InvalidDataException("Model response event exceeds the size limit.");
+                throw Net.BoundedResponse.TooLarge("model", "event", eventBytes);
             pending.Write(part);
         }
 
@@ -92,7 +92,7 @@ internal static class OpenAISseReader
                     throw new ResponsesStreamReadException(error);
                 }
                 if ((total += count) > responseBytes)
-                    throw new InvalidDataException("Model response exceeds the size limit.");
+                    throw Net.BoundedResponse.TooLarge("model", "body", responseBytes);
                 if (callbacks?.OnDecodedChunk is { } chunk)
                 {
                     var written = decoder.GetChars(bytes, 0, count, chars, 0, flush: count == 0);

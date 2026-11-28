@@ -39,7 +39,7 @@ internal static class ConfigurationYaml
         }
     }
 
-    private static InvalidDataException TooLarge() => new("Configuration YAML exceeds its expansion limit.");
+    private static InvalidDataException TooLarge() => new("This configuration expands to more than the allowed size. Use fewer YAML aliases or merges.");
 
     // YamlStream constructs the source graph recursively and hashes mapping keys before
     // conversion. Enforce physical depth and scalar keys before handing it each event.
@@ -117,7 +117,8 @@ internal static class ConfigurationYaml
                     var name = (YamlScalarNode)key;
                     budget.Charge(name);
                     if (name.Value == "<<") Merge(result, value, budget);
-                    else result.Add(name.Value ?? "null", Convert(value, budget));
+                    else if (!result.TryAdd(name.Value ?? "null", Convert(value, budget)))
+                        throw new InvalidDataException($"Duplicate key '{name.Value}' in the configuration.");
                 }
                 return result;
             }
@@ -131,7 +132,7 @@ internal static class ConfigurationYaml
         void AddMapping(YamlNode node)
         {
             budget.MergeStep();
-            if (node is not YamlMappingNode) throw new InvalidDataException("Invalid YAML merge source.");
+            if (node is not YamlMappingNode) throw new InvalidDataException("A YAML merge (<<) must refer to a mapping or a list of mappings.");
             var values = (JsonObject)Convert(node, budget)!;
             // Detach once before inserting: JsonNode values cannot have two parents.
             var entries = values.ToArray();
@@ -139,7 +140,7 @@ internal static class ConfigurationYaml
             foreach (var (key, value) in entries)
             {
                 budget.MergeStep();
-                if (!result.TryAdd(key, value)) throw new InvalidDataException("Duplicate configuration mapping key.");
+                if (!result.TryAdd(key, value)) throw new InvalidDataException($"Duplicate key '{key}' in the configuration.");
             }
         }
         if (source is YamlSequenceNode list)
