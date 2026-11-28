@@ -88,6 +88,43 @@ public sealed partial class TenantReplicaTests
     }
 
     [Fact]
+    public async Task AThrottledOwnerLeavesReceiverRoomForItsNeighbourAndActivation()
+    {
+        await using var cluster = await StartAsync("alpha", "beta");
+        await cluster.WhoAmIAsync("alpha");
+        await cluster.WhoAmIAsync("beta");
+        var boot = cluster.Replica.Replica;
+        var database = cluster.Database.OpenApp();
+        var active = cluster.Replica.Activations!;
+        var edge = new MeshAuthentication(cluster.MeshKey, "edge");
+        var owner = new MeshAuthentication(cluster.MeshKey, boot, nonceLimit: 16);
+        using var router = new TenantRouter(boot, owner, new RouteDirectory(database), new ReplicaRegistry(database),
+            active, new HostnameDirectory(database), LeaseTimings.Default, (generation, context) =>
+            {
+                context.Response.StatusCode = generation.Id.Tenant == "alpha" ? 429 : 204;
+                return Task.CompletedTask;
+            }, () => true, _ => {}, default);
+        async Task<int> Send(string tenant, bool activate = false)
+        {
+            var context = new DefaultHttpContext();
+            var request = context.Request;
+            request.Method = activate ? "POST" : "GET";
+            request.Host = new HostString(tenant + ".test");
+            request.Path = "/";
+            context.Features.Get<IHttpRequestFeature>()!.RawTarget = "/";
+            request.Headers[MeshAuthentication.Header] = edge.Sign(activate ? "activate" : "dispatch", boot,
+                tenant, activate ? null : active.Current(tenant)!.Id.Epoch, request.Method, request.Host.Value, "/").Header;
+            await router.MeshAsync(context);
+            return context.Response.StatusCode;
+        }
+        Assert.Equal(429, await Send("alpha"));
+        Assert.Equal(429, await Send("alpha"));
+        Assert.Equal(503, await Send("alpha"));
+        Assert.Equal(204, await Send("beta"));
+        Assert.Equal(204, await Send("alpha", activate: true));
+    }
+
+    [Fact]
     public async Task RemoteNodeFileTransferStreamsPastTheFrontDefaultToTheRealTransferRoute()
     {
         await using var nodes = new NodeFileTransferTests.Fixture();
