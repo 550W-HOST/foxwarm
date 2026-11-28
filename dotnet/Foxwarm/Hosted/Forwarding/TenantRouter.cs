@@ -11,8 +11,8 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
     ReplicaRegistry registry, TenantActivations activations, HostnameDirectory hosts, LeaseTimings timings,
     Func<TenantGeneration, HttpContext, Task> dispatch, Func<bool> hasCapacity, Action<string> log, CancellationToken processStop, int tenantHoldLimit = 128) : IDisposable
 {
-    private readonly EdgeHoldBudget holds = new(tenantHoldLimit);
-    private readonly SemaphoreSlim buffers = new(2048);
+    private readonly EdgeHoldBudget holds = new(tenantHoldLimit, unresolved: tenantHoldLimit);
+    private readonly EdgeHoldBudget buffers = new(tenantHoldLimit);
     private readonly MeshTransport transport = new(authentication);
     private readonly object gate = new();
     private readonly Dictionary<string, Task<TenantRouteState?>> reads = new(StringComparer.Ordinal);
@@ -105,18 +105,22 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
         MeshAuthentication.StripControlHeaders(request.Headers);
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, stopping.Token);
         budget.CancelAfter(timings.Ttl);
-        IDisposable? held = holds.TryEnter(null);
+        IDisposable? held = null;
         void EndHold() => Interlocked.Exchange(ref held, null)?.Dispose();
-        if (held is null) { context.Response.StatusCode = 503; return; }
         var originalBody = request.Body;
         ForwardedBody? body = null;
-        var reservedBuffer = false;
+        IDisposable? reservedBuffer = null;
         var dispatched = false;
         try
         {
-            var slug = await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false);
+            if (!hosts.TryCached(request.Host.Host, out var slug))
+            {
+                held = holds.TryEnter(null);
+                if (held is null) { context.Response.StatusCode = 503; return; }
+                slug = await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false);
+                EndHold();
+            }
             if (slug is null) { context.Response.StatusCode = 404; return; }
-            EndHold();
             held = holds.TryEnter(slug);
             if (held is null) { context.Response.StatusCode = 503; return; }
             var hasBody = context.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody
@@ -165,10 +169,10 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
                                 size.MaxRequestBodySize = null;
                             if (request.ContentLength is null or <= ForwardedBody.Limit)
                             {
-                                reservedBuffer = buffers.Wait(0);
-                                if (!reservedBuffer) break;
+                                reservedBuffer = buffers.TryEnter(slug);
+                                if (reservedBuffer is null) break;
                             }
-                            request.Body = body = new ForwardedBody(originalBody, request.ContentLength, reservedBuffer);
+                            request.Body = body = new ForwardedBody(originalBody, request.ContentLength, reservedBuffer is not null);
                         }
                         var outcome = await transport.DispatchAsync(context, forwarder, route, slug, budget.Token, EndHold).ConfigureAwait(false);
                         if (outcome == DispatchOutcome.Completed) return;
@@ -189,7 +193,7 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
             EndHold();
             request.Body = originalBody;
             body?.Dispose();
-            if (reservedBuffer) buffers.Release();
+            reservedBuffer?.Dispose();
         }
         if (!context.RequestAborted.IsCancellationRequested) context.Response.StatusCode = 503;
     }

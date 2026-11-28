@@ -754,20 +754,33 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
         }
     }
 
+    private static string Key(string host) => (host.EndsWith('.') ? host[..^1] : host).ToLowerInvariant();
+
+    internal bool TryCached(string host, out string? tenant)
+    {
+        lock (gate) return TryCachedLocked(Key(host), out tenant);
+    }
+
+    private bool TryCachedLocked(string key, out string? tenant)
+    {
+        if (cache.TryGetValue(key, out var cached))
+        {
+            if (cached.Expires > clock()) { tenant = cached.Tenant; return true; }
+            Remove(key, cached);
+        }
+        tenant = null;
+        return false;
+    }
+
     internal async Task<string?> ResolveAsync(string host, CancellationToken token)
     {
-        var key = (host.EndsWith('.') ? host[..^1] : host).ToLowerInvariant();
+        var key = Key(host);
         while (true)
         {
             long started;
             lock (gate)
             {
-                if (cache.TryGetValue(key, out var cached))
-                {
-                    if (cached.Expires > clock())
-                        return cached.Tenant;
-                    Remove(key, cached);
-                }
+                if (TryCachedLocked(key, out var hit)) return hit;
                 started = generation;
             }
             var tenant = await QueryAsync(key, token).ConfigureAwait(false);

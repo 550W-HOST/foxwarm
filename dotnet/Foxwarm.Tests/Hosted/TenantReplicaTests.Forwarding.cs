@@ -88,6 +88,71 @@ public sealed partial class TenantReplicaTests
     }
 
     [Fact]
+    public async Task AReplayBufferHeldPastResponseHeadersIsChargedToItsTenant()
+    {
+        await using var owner = await StartAsync("alpha", "beta");
+        owner.AddRoutes = app => app.MapPost("/stream-reply", async context =>
+        {
+            await context.Response.WriteAsync("begin");
+            await context.Response.Body.FlushAsync();
+            await owner.Continue.Task.WaitAsync(context.RequestAborted);
+        });
+        await owner.WhoAmIAsync("alpha");
+        await owner.WhoAmIAsync("beta");
+        await using var edge = await StartReplicaAsync(owner.Database, "replica-b", owner.MeshKey, tenantHolds: 1);
+        async Task<HttpResponseMessage> Post(string tenant, string path)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{edge.Replica.FrontPort}" + path);
+            request.Headers.Host = tenant + ".test";
+            request.Content = new StringContent("body");
+            return await edge.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        }
+        using var streaming = await Post("alpha", "/stream-reply");
+        try
+        {
+            streaming.EnsureSuccessStatusCode();
+            using var second = await Post("alpha", "/wire");
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, second.StatusCode);
+            using var neighbour = await Post("beta", "/wire");
+            neighbour.EnsureSuccessStatusCode();
+        }
+        finally { owner.Continue.TrySetResult(); }
+    }
+
+    [Fact]
+    public async Task CachedHostnameCanDispatchWhileTheUnresolvedShareIsOccupied()
+    {
+        await using var cluster = await StartAsync("alpha");
+        await cluster.WhoAmIAsync("alpha");
+        var database = cluster.Database.OpenApp();
+        var hosts = new HostnameDirectory(database);
+        await hosts.RefreshAsync(default);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        hosts.AfterQuery = async () => { entered.TrySetResult(); await release.Task; };
+        var boot = cluster.Replica.Replica;
+        using var router = new TenantRouter(boot, new MeshAuthentication(cluster.MeshKey, boot), new RouteDirectory(database),
+            new ReplicaRegistry(database), cluster.Replica.Activations!, hosts, LeaseTimings.Default,
+            (_, c) => { c.Response.StatusCode = 204; return Task.CompletedTask; }, () => true, _ => {}, default, tenantHoldLimit: 1);
+        async Task<int> Get(string host)
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Host = new HostString(host);
+            await router.PublicAsync(context, null!); // Exact local owner; no mesh forwarding.
+            return context.Response.StatusCode;
+        }
+        var miss = Get("missing.test");
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(503, await Get("other-miss.test").WaitAsync(TimeSpan.FromSeconds(3)));
+            Assert.Equal(204, await Get("alpha.test").WaitAsync(TimeSpan.FromSeconds(3)));
+        }
+        finally { release.SetResult(); }
+        Assert.Equal(404, await miss);
+    }
+
+    [Fact]
     public async Task WaitingForRemoteHeadersLeavesCapacityForAnotherTenant()
     {
         await using var owner = await StartAsync("alpha", "beta");
