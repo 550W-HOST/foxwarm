@@ -104,7 +104,8 @@ internal static class OperatorServer
             return;
         }
         var segments = (remaining.Value ?? "").Trim('/').Split('/');
-        if ((request.Method, segments) is not ("GET", ["placement"] or ["deletions"] or ["tenants"] or ["tenants", _] or ["profiles", _, "ceiling"])
+        var grantRoute = segments is ["tenants", _, "provider-grants"] && request.Method is "GET" or "PUT" or "DELETE";
+        if (!grantRoute && (request.Method, segments) is not ("GET", ["placement"] or ["deletions"] or ["tenants"] or ["tenants", _] or ["profiles", _, "ceiling"])
             and not ("POST", ["tenants"] or ["tenants", _, "rotate" or "suspend" or "resume"]) and not ("DELETE", ["tenants", _]) and not ("PATCH", ["tenants", _]) and not ("PUT", ["profiles", _, "ceiling"]))
         {
             response.StatusCode = 404;
@@ -125,6 +126,13 @@ internal static class OperatorServer
             switch (request.Method, segments)
             {
                 case ("GET", ["deletions"]): result = await store.ReadReceiptsAsync(ct); break;
+                case ("GET", ["tenants", var slug, "provider-grants"]): result = await store.ReadGrantsAsync(slug, ct); break;
+                case ("PUT" or "DELETE", ["tenants", var slug, "provider-grants"]):
+                    var ids = request.Query["providerId"];
+                    if (ids.Count != 1 || string.IsNullOrEmpty(ids[0])) throw new OperatorProblem(400, "Supply one Provider ID.");
+                    result = await store.ChangeGrantAsync(slug, ids[0]!, request.Method == "PUT" ? await Body(request, ct) : null,
+                        new Providers.ProviderGrants(listener.Deployment), ct);
+                    break;
                 case ("GET", ["placement"]): result = await store.PlacementAsync(ct); break;
                 case ("GET", ["tenants"]): result = await store.ReadAsync(null, ct); break;
                 case ("GET", ["tenants", var slug]): result = await store.ReadAsync(slug, ct); break;
