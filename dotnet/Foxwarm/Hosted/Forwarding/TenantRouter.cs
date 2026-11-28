@@ -139,16 +139,16 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
                     route = await ActivateAsync(slug, state, request.Host.Value, budget.Token).ConfigureAwait(false);
                 if (route is not null && !state.Draining)
                 {
+                    if (await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false) != slug)
+                    {
+                        context.Response.StatusCode = StatusCodes.Status404NotFound;
+                        return;
+                    }
                     // A previously forwarded upload has already used the public body feature.
                     // Even if the next owner is this boot, enter its mesh listener with a fresh
                     // owner-side limit and a body the selected route can configure before reading.
                     if (route.Boot == boot && body is null)
                     {
-                        if (await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false) != slug)
-                        {
-                            context.Response.StatusCode = StatusCodes.Status404NotFound;
-                            return;
-                        }
                         if (activations.TryAdmitExact(slug, route.Epoch, route.Boot) is { } local)
                         {
                             using (local.Admission)

@@ -82,6 +82,31 @@ public sealed class ForwardedWebUiTests
         }
     }
 
+    [Theory]
+    [InlineData("alpha.test:8443", true)]
+    [InlineData("127.0.0.1", false)]
+    public async Task HostedTemplateWithoutConfiguredUrlUsesOnlyAReachableRequestOrigin(string authority, bool usable)
+    {
+        await using var cluster = await ReplicaProcessHarness.CreateAsync();
+        await cluster.AddTenantAsync("alpha");
+        await cluster.Database.ExecuteOwnerAsync("INSERT INTO tenant_hostnames(hostname,tenant_id,kind) SELECT '127.0.0.1',tenant_id,'custom' FROM tenants WHERE name='alpha'");
+        var owner = await cluster.StartAsync("owner");
+        using (var warm = await owner.GetAsync("alpha")) Assert.Equal(HttpStatusCode.Unauthorized, warm.StatusCode);
+        var edge = await cluster.StartAsync("edge");
+        using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false });
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{edge.FrontPort}/node/run.sh");
+        request.Headers.Host = authority;
+        request.Headers.Add("X-Forwarded-Host", "untrusted.test");
+        request.Headers.Add("X-Forwarded-Proto", "https");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(usable ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        if (usable) Assert.Contains($"HOST=\"http://{authority}\"", body);
+        else Assert.Contains("public URL", body);
+        Assert.DoesNotContain("127.0.0.1", body);
+        Assert.DoesNotContain("untrusted.test", body);
+    }
+
     [Fact]
     public async Task EmptyOptionalBodiesAreAbsentAndMalformedNonemptyBodiesRemainBadRequests()
     {

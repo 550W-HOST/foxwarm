@@ -298,6 +298,70 @@ public sealed partial class TenantReplicaTests
         Assert.Equal(HttpStatusCode.NotFound, refusal.StatusCode);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARemoteActivationCannotDispatchThroughABindingTheEdgeAlreadyInvalidated(bool reassigned)
+    {
+        await using var edge = await StartAsync(LeaseTimings.Default, "alpha", "beta");
+        await edge.WhoAmIAsync("beta");
+        var candidate = Enumerable.Range(0, 100).Select(i => "other-" + i)
+            .First(name => Placement.Score("alpha", name) > Placement.Score("alpha", "replica-a"));
+        var boot = candidate + "/1";
+        var database = edge.Database.OpenApp();
+        var stale = new HostnameDirectory(database);
+        await stale.RefreshAsync(default); // The receiver has not processed the later notification.
+        var auth = new MeshAuthentication(edge.MeshKey, boot);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseKestrel(k => k.Listen(IPAddress.Loopback, 0, e => e.Protocols = HttpProtocols.Http2));
+        await using var peer = builder.Build();
+        int activations = 0, dispatches = 0;
+        var changeObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        peer.Run(async context =>
+        {
+            var attempt = auth.Accept(context.Request)!;
+            if (attempt.Purpose == "dispatch")
+            {
+                if (context.Request.Path == "/held") Interlocked.Increment(ref dispatches);
+                Assert.Equal("alpha", await stale.ResolveAsync(context.Request.Host.Host, default));
+                await context.Response.WriteAsync("stale owner");
+                return;
+            }
+            try
+            {
+                Interlocked.Increment(ref activations);
+                await edge.Database.TakeLeaseAsync(await edge.Database.TenantIdAsync("alpha"), boot);
+                await edge.Database.ExecuteOwnerAsync(reassigned
+                    ? "UPDATE tenant_hostnames SET kind='custom',tenant_id=(SELECT tenant_id FROM tenants WHERE name='beta') WHERE hostname='alpha.test';"
+                    : "DELETE FROM tenant_hostnames WHERE hostname='alpha.test';");
+                // Probe the very same cached authority. Another name can miss the cache and see
+                // its new row before this edge has received the invalidation for alpha.test.
+                await UntilAsync(async () =>
+                {
+                    using var probe = await edge.GetAsync("alpha");
+                    return reassigned ? (await probe.Content.ReadAsStringAsync()).StartsWith("beta:", StringComparison.Ordinal)
+                        : probe.StatusCode == HttpStatusCode.NotFound;
+                }, "edge observed the original binding change");
+                changeObserved.SetResult();
+                context.Response.StatusCode = StatusCodes.Status204NoContent;
+            }
+            catch (Exception error)
+            {
+                changeObserved.TrySetException(error);
+                throw;
+            }
+        });
+        await peer.StartAsync();
+        await new ReplicaRegistry(database).RegisterAsync(boot, null, Foxwarm.Hosted.Schema.SchemaMigrator.BinaryLevel, 2, default, meshAddress: peer.Urls.Single());
+        using var result = await edge.GetAsync("alpha", "/held");
+        await changeObserved.Task.WaitAsync(TimeSpan.FromSeconds(12));
+        Assert.Equal(1, activations);
+        Assert.Equal("alpha", await stale.ResolveAsync("alpha.test", default));
+        Assert.Equal(HttpStatusCode.NotFound, result.StatusCode);
+        Assert.Equal(0, dispatches);
+    }
+
     [Fact]
     public async Task ARemoteSlowResponseOutlivesTheHoldWithoutReceivingHeaders()
     {
