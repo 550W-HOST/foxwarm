@@ -1,35 +1,45 @@
+using Foxwarm.Images;
 using Foxwarm.Sessions;
 
 namespace Foxwarm.Channels;
 
-/// <summary>One platform fetch failure. A rejected event has exhausted its attempts or was refused by policy.</summary>
-internal sealed class ChannelMediaFetchFailure(Exception cause, bool rejected) : Exception(cause.Message, cause)
-{
-    internal bool Rejected { get; } = rejected;
-}
+internal sealed class ChannelMediaFetchFailure(Exception cause) : Exception(cause.Message, cause);
 
-/// <summary>Retries fetches within the same poll position. The Session's storage and admission
-/// never run inside a fetch; an unavailable authority must not spend this event's attempts.</summary>
+/// <summary>Media failures and terminal skips live until the poll position commits. Storage
+/// and admission failures retain the position without consuming a fetch attempt.</summary>
 internal sealed class PolledMedia
 {
+    private const int AttemptLimit = 3;
     private readonly Dictionary<string, int> failures = new(StringComparer.Ordinal);
 
-    internal async Task<T> FetchAsync<T>(string eventId, Func<Task<T>> fetch, CancellationToken stop)
+    internal async Task HandleAsync(string eventId, Func<Task> handle, ChannelHealth health)
     {
-        try
+        var attempts = failures.GetValueOrDefault(eventId);
+        if (attempts >= AttemptLimit) return;
+        try { await handle(); }
+        catch (ChannelMediaFetchFailure fetch)
         {
-            return await fetch();
-        }
-        catch (Exception error) when (!stop.IsCancellationRequested && error is not SessionManager.ReceivedFileTooLarge)
-        {
-            var attempts = failures.GetValueOrDefault(eventId) + 1;
+            var error = fetch.InnerException!;
+            attempts = ChannelFailure.Refused(error) ? AttemptLimit : attempts + 1;
             failures[eventId] = attempts;
-            throw new ChannelMediaFetchFailure(error, ChannelFailure.Refused(error) || attempts >= 3);
+            if (attempts < AttemptLimit) throw;
+            health.Log(error);
+        }
+        catch (ImageInputException error) when (error.InvalidRaster)
+        {
+            failures[eventId] = AttemptLimit;
+            health.Log(error);
         }
     }
 
-    internal static bool Rejected(Exception error) =>
-        error is ChannelMediaFetchFailure { Rejected: true } or Foxwarm.Images.ImageInputException { InvalidRaster: true };
+    internal static async Task<T> FetchAsync<T>(Func<Task<T>> fetch, CancellationToken stop)
+    {
+        try { return await fetch(); }
+        catch (Exception error) when (!stop.IsCancellationRequested && error is not SessionManager.ReceivedFileTooLarge)
+        {
+            throw new ChannelMediaFetchFailure(error);
+        }
+    }
 
     internal void Checkpointed() => failures.Clear();
 }

@@ -138,10 +138,12 @@ internal sealed class WeixinChannel : IManagedChannel
                 if (SessionWait.Text(response["get_updates_buf"]) is { Length: > 0 } next && next != cursor)
                 {
                     if (cursors is not null)
+                    {
                         await cursors.SaveAsync(id, account, new JsonObject { ["get_updates_buf"] = next });
+                        health.Recover("Weixin input");
+                    }
                     cursor = next;
                 }
-                health.Recover("Weixin input");
             }
             catch (Exception error)
             {

@@ -202,11 +202,9 @@ internal sealed class TelegramChannel : IManagedChannel
                     if (gate is not null && admission is null) return;
                     try
                     {
-                        try { await HandleUpdateAsync(update); }
-                        catch (Exception error) when (PolledMedia.Rejected(error))
-                        {
-                            health.Log(error.InnerException ?? error);
-                        }
+                        var receipt = MessageReceipt(update);
+                        var key = receipt ?? update["update_id"]?.ToString() ?? "";
+                        await mediaAttempts.HandleAsync(key, () => HandleUpdateAsync(update, receipt), health);
                         if (next != offset && cursors is not null)
                             await cursors.SaveAsync(id, account, new JsonObject { ["offset"] = next });
                         offset = next;
@@ -249,7 +247,12 @@ internal sealed class TelegramChannel : IManagedChannel
         }
     }
 
-    private async Task HandleUpdateAsync(JsonObject update)
+    private string? MessageReceipt(JsonObject update) =>
+        update["message"] is JsonObject message && message["chat"]?["id"] is JsonValue chat
+        && message["message_id"] is JsonValue identity
+            ? ChannelCursors.Receipt("telegram", id, account, Identity(chat) + ":" + Identity(identity)) : null;
+
+    private async Task HandleUpdateAsync(JsonObject update, string? receipt)
     {
         if (
             update["message"] is not JsonObject message
@@ -271,8 +274,7 @@ internal sealed class TelegramChannel : IManagedChannel
                 _ = ObserveAsync(SendAsync(chat, text, CancellationToken.None));
                 return Task.CompletedTask;
             }
-        ) { Polled = true, Receipt = message["message_id"] is JsonValue identity
-            ? ChannelCursors.Receipt("telegram", id, account, chat + ":" + Identity(identity)) : null };
+        ) { Polled = true, Receipt = receipt };
         var bot = SessionCatalog.Flag(from?["is_bot"]);
         if (SessionWait.Text(message["text"]) is { } text)
         {
@@ -309,8 +311,7 @@ internal sealed class TelegramChannel : IManagedChannel
             return;
         }
         var deliveryToken = sessions.ScheduledProducers is null ? stopping.Token : cursors?.Closing ?? default;
-        var eventId = context.Receipt ?? update["update_id"]?.ToString() ?? fileId;
-        var file = await mediaAttempts.FetchAsync(eventId,
+        var file = await PolledMedia.FetchAsync(
             () => ApiAsync("getFile", new JsonObject { ["file_id"] = fileId }, deliveryToken), deliveryToken);
         if (SessionWait.Text(file?["file_path"]) is not { Length: > 0 } filePath)
         {
@@ -331,7 +332,7 @@ internal sealed class TelegramChannel : IManagedChannel
             ? "image/jpeg"
             : SessionWait.Text(media["mime_type"]) ?? "application/octet-stream";
         var incoming = await sessions.ReceiveRemoteChannelFileAsync(
-            "telegram", chat, () => mediaAttempts.FetchAsync(eventId, Download, deliveryToken),
+            "telegram", chat, () => PolledMedia.FetchAsync(Download, deliveryToken),
             name, mime, SessionWait.Text(message["caption"]) ?? "", deliveryToken
         );
         await router.HandleExternalMessageAsync(context, incoming);

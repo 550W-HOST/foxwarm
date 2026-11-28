@@ -103,11 +103,9 @@ internal sealed partial class MatrixChannel
                         )
                         {
                             await ProcessRoomStateAsync(room, new JsonArray(item.DeepClone()));
-                            try { await ProcessTimelineAsync(room, item); }
-                            catch (Exception error) when (PolledMedia.Rejected(error))
-                            {
-                                health.Log(error.InnerException ?? error);
-                            }
+                            var eventKey = SessionWait.Text(item["event_id"])
+                                ?? room + ":" + SessionWait.Text(item["content"]?["url"]);
+                            await mediaAttempts.HandleAsync(eventKey, () => ProcessTimelineAsync(room, item), health);
                         }
                     }
                     if (cursors is not null && next is not null)
@@ -116,7 +114,7 @@ internal sealed partial class MatrixChannel
                         await cursors.SaveAsync(id, Account, new JsonObject { ["next_batch"] = next, ["encryptedRooms"] = rooms });
                     }
                     cursor = next;
-                    mediaAttempts.Checkpointed();
+                    if (next is not null) mediaAttempts.Checkpointed();
                     health.Recover("Matrix input");
                 }
                 catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
@@ -303,7 +301,7 @@ internal sealed partial class MatrixChannel
                 var mime = SessionWait.Text(content["info"]?["mimetype"]);
                 if (string.IsNullOrEmpty(mime)) mime = image ? "image/jpeg" : "application/octet-stream";
                 message = await sessions.ReceiveRemoteChannelFileAsync(
-                    "matrix", room, () => mediaAttempts.FetchAsync(eventId.Length > 0 ? eventId : media.AbsoluteUri, Download, downloadStop),
+                    "matrix", room, () => PolledMedia.FetchAsync(Download, downloadStop),
                     name, mime, "", CancellationToken.None, image
                 );
                 break;
