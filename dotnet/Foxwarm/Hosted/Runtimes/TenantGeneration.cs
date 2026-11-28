@@ -53,6 +53,9 @@ internal interface IGenerationRuntime : IAsyncDisposable
     /// </summary>
     bool Idle { get; }
 
+    /// <summary>Acknowledge a reconciled wake-up only after successful publication.</summary>
+    Task PublishedAsync(CancellationToken token) => Task.CompletedTask;
+
     /// <summary>Stops work the runtime starts on its own: timers, pollers, wait timeouts.</summary>
     Task StopProducersAsync(CancellationToken token);
 
@@ -64,6 +67,9 @@ internal interface IGenerationRuntime : IAsyncDisposable
     /// nothing is due.
     /// </summary>
     Task<WakeupDue?> NextDueAsync(CancellationToken token);
+
+    /// <summary>The stopped clock's nomination, even if the final canonical wait read failed.</summary>
+    System.Text.Json.Nodes.JsonObject? RecoveryOccurrence => null;
 }
 
 /// <summary>Builds a generation's runtime; it isn't started yet.</summary>
@@ -125,6 +131,20 @@ internal sealed class TenantGeneration
     internal Task<StopResult> Stopped => stopped.Task;
 
     internal void Settle(StopResult result) => stopped.TrySetResult(result);
+
+    // A settled null deadline means no wake-up; a failed read needs a recoverable hand-back.
+    internal WakeupDue? HandBack { get; private set; }
+    internal bool ScheduleSettled { get; private set; }
+
+    internal Task<StopResult> RetireWithWakeupAsync(CancellationToken token) => RetireAsync(async () =>
+    {
+        using var steps = CancellationTokenSource.CreateLinkedTokenSource(token, Fence.Lost);
+        var runtime = Runtime!;
+        await runtime.StopProducersAsync(steps.Token).ConfigureAwait(false);
+        await runtime.SettleAsync(steps.Token).ConfigureAwait(false);
+        HandBack = await runtime.NextDueAsync(steps.Token).ConfigureAwait(false);
+        ScheduleSettled = true;
+    });
 
     /// <summary>Completes when the runtime has been disposed.</summary>
     internal Task Disposed => disposed.Task;

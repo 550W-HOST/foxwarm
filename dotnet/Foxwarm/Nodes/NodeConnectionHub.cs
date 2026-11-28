@@ -134,6 +134,11 @@ internal sealed partial class NodeConnectionHub : IDisposable
     // RuntimeCapabilities.MasterNode: whether master is a Node of this runtime.
     internal bool MasterNode { get; init; } = true;
 
+    internal bool HasConnections
+    {
+        get { lock (gate) return nodes.Count != 0 || !pending.IsEmpty; }
+    }
+
     internal bool Connected(string id)
     {
         if (id == "master")

@@ -218,7 +218,9 @@ internal sealed partial class SessionManager
         IDisposable? hydration = null;
         try
         {
-            var token = acceptedTimer ? CancellationToken.None : admissionStop.Token;
+            // A delivery accepted before a normal stop may finish its cold load. A failed
+            // hosted startup cancels that generation's load even when no other caller waits.
+            var token = acceptedTimer ? producers?.StartupAborted ?? CancellationToken.None : admissionStop.Token;
             token.ThrowIfCancellationRequested();
             if (BeforeAdmissionRead is { } before)
                 await before(id, token);

@@ -255,10 +255,12 @@ internal sealed partial class SessionManager
 
     private async Task<JsonObject?> DeliverTimerAsync(JsonObject timer)
     {
+        var producerToken = producers?.StartupAborted ?? default;
+        producerToken.ThrowIfCancellationRequested();
         if (TimerArguments.Script(timer))
         {
             using var use =
-                await UseExistingAsync(SessionWait.Text(timer["sessionId"])!, acceptedTimer: true)
+                await UseExistingAsync(SessionWait.Text(timer["sessionId"])!, producerToken, acceptedTimer: true)
                 ?? throw new InvalidDataException("Timer owner Session not found.");
             var outcome = await RunOwnerScriptAsync(
                 use.Owner,
@@ -266,7 +268,7 @@ internal sealed partial class SessionManager
                 acceptedTimer: true,
                 "Timer owner lifetime is unavailable.",
                 "timer",
-                SessionWait.Text(timer["id"])
+                SessionWait.Text(timer["id"]), producerToken
             );
             if (outcome is JsonObject result && result["error"] is not null)
                 Console.Error.WriteLine(
@@ -278,10 +280,11 @@ internal sealed partial class SessionManager
             return outcome;
         }
         using var targetUse = MainTimers.Flag(timer["newSession"]) ? null
-            : await UseRequiredAsync(SessionWait.Text(timer["sessionId"])!);
-        var target = targetUse?.Owner ?? await CreateTimerSessionAsync(timer);
+            : await UseRequiredAsync(SessionWait.Text(timer["sessionId"])!, producerToken);
+        var target = targetUse?.Owner ?? await CreateTimerSessionAsync(timer, producerToken);
         using var admission = BeginOwnerMutation(target);
-        await WaitForIdentityMutationAsync(target.Id);
+        await WaitForIdentityMutationAsync(target.Id, producerToken);
+        producerToken.ThrowIfCancellationRequested();
         target.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(target))
             throw new InvalidOperationException("Timer target lifetime is unavailable.");
@@ -323,12 +326,12 @@ internal sealed partial class SessionManager
         bool acceptedTimer,
         string unavailable,
         string origin,
-        string? originId
+        string? originId, CancellationToken token = default
     )
     {
         using (BeginOwnerMutation(owner, acceptedTimer))
         {
-            await WaitForIdentityMutationAsync(owner.Id);
+            await WaitForIdentityMutationAsync(owner.Id, token);
             owner.Entry.RequireIdentityAuthority();
             if (!IsCurrentOwner(owner))
                 throw new InvalidOperationException(unavailable);
@@ -347,11 +350,11 @@ internal sealed partial class SessionManager
         );
         return await dispatcher.ExecuteAsync(
                 new JsonObject { ["name"] = "run_script", ["args"] = script.DeepClone() },
-                CancellationToken.None
+                token
             ) as JsonObject;
     }
 
-    private async Task<SessionOwner> CreateTimerSessionAsync(JsonObject timer)
+    private async Task<SessionOwner> CreateTimerSessionAsync(JsonObject timer, CancellationToken token)
     {
         var owner = AuthorizationTarget(SessionWait.Text(timer["sessionId"])!);
         var agent = TimerArguments.Optional(timer["agentName"]) ?? owner?.Agent ?? "main";
@@ -380,7 +383,7 @@ internal sealed partial class SessionManager
                     );
             var id = SessionIdentity.Build(agent, name);
             var key = CreationKey(id);
-            await key.WaitAsync();
+            await key.WaitAsync(token);
             try
             {
                 if (await IdReservedAsync(id))

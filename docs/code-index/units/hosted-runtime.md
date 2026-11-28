@@ -144,18 +144,19 @@ A runtime owns what its build started, so a retired or failed runtime releases i
 - **Retirement.** Each slot keeps its retiring generation (fenced, idle-released, shut down). A new activation of the tenant waits for that retirement: a confirmed stop clears it, an unconfirmed one keeps the tenant unavailable here (`TenantFencedException`) until the process exits. Each disposal runs off the caller's thread.
 - **Failed starts** dispose what was built and, when that cleanup is confirmed and the grant wasn't lost meanwhile, release it with a backoff (`ReleaseAfterFailedStartAsync`). The wake-up row records the backoff, and an autonomous activation (wake-up or recovery) creates a row if there was none. At shutdown the grant is released plainly instead. A start whose cleanup isn't confirmed releases nothing.
 - **Admission gate.** `AdmissionGate` admits each unit of work and closes once, for idle release, drain, fence or stop. Every admission also checks the generation's grant against its deadline, so admission never depends on a loss handler having run. Admission and the idle check share one lock, so an idle latch can't race an admission, and a latched gate never reopens.
+- **Producer admission (2026-11-28, coordinator decision).** Scheduled producers may enter the same gate while a current grant is building, as well as after publication. Requests require publication. A latch refuses both, and a producer holds its admission through its delivery and completion save, updating the idle clock on exit. A generation that fails construction or never publishes cancels its producer work and drains it before confirming its stop or releasing its grant. See [scheduled unload and restart](./hosted-channels-timers.md#scheduled-unload-and-restart).
 - **Idle release** (`TryReleaseIdleAsync`), in order:
   1. Latch the gate if nothing is admitted, no admission happened within the idle time, and the runtime's own check holds.
   2. Stop producers.
-  3. Settle in-flight deliveries.
-  4. Compute the next due time from the persisted state.
-  5. Dispose the runtime; its final saves still hold the lease.
+  3. Settle in-flight deliveries. In a hosted Main, stop its services and streams and drain the accepted Session writers and final saves while holding the lease.
+  4. Compute the next due time from the settled state while tenant storage is available. See [scheduled unload and restart](./hosted-channels-timers.md#scheduled-unload-and-restart) for a failed deadline read or stale startup.
+  5. Finish disposing the runtime and drain remaining generation admissions.
   6. Write the wake-up row and release the lease in one transaction at the expected epoch (`ReleaseWithWakeupAsync`). A null due time clears the row.
 
   Work refused by the latched gate becomes demand (`AdmitAsync`). Demand that arrives before the transaction aborts the release: the grant stays, and the waiting activation builds the next generation over it at the same epoch. Steps 2–5 get the drain bound: a release that overruns it loses its grant unreleased (`IdleReleaseOutcome.Overrun`), the supervised fence cancels the steps and joins them, and the process ends if they don't confirm. A tenant is never latched and unavailable while its grant renews.
 - **Shutdown** (`ShutdownAsync`, one absolute bound, `ShutdownBound`): every generation is latched and every retirement starts at once, off the caller's thread. Each tenant's grant is released as soon as its own stop is confirmed, without waiting for the others. At the bound, every tenant whose stop isn't confirmed loses its grant unreleased, and the result is false.
-- **Wake-up carry-through.** The activation reads the tenant's wake-up row and passes it to the runtime (`ActivationContext.Wakeup`), so the due occurrence fires even when it is already past. The row stays until the runtime replaces or clears it.
-- **Not yet.** The runtimes host comes next: it wires the production `MainHost`, the front and the producers into the gate, and the renewer and supervisor into the replica. The wake-up and recovery scans belong to the timers work.
+- **Wake-up carry-through.** The activation reads the tenant's wake-up row and passes it to the runtime (`ActivationContext.Wakeup`), so the due occurrence fires even when it is already past. A reconciled runtime acknowledges the row after publication; an unarmed or stale build preserves it.
+- **Production composition.** The [runtimes host](./hosted-runtimes-host.md) wires the front, producers, renewer and supervisor. [Scheduled unload and restart](./hosted-channels-timers.md) describes the sources and retry of the hand-back.
 
 ## D-hosted-tenant-server
 

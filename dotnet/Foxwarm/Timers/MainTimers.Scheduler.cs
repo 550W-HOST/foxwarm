@@ -66,11 +66,17 @@ internal sealed partial class MainTimers
                 record.Reason = "Unrecognized internal wait relationship.";
             return record;
         }
+        if (schedulesWakeups && at is double instant && record.Reason is null)
+            record.Next = (long)Math.Truncate(instant);
         if (record.Reason is null && hasCron)
         {
             try
             {
-                _ = new CronSchedule(cron!, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).Next();
+                var next = new CronSchedule(cron!, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).Next();
+                // An edit already in the save lane may publish after StopFuture. Its durable
+                // replacement then supplies the release deadline without starting a clock.
+                if (schedulesWakeups)
+                    record.Next = next;
             }
             catch (Exception error)
                 when (error is InvalidDataException or ArgumentException or OverflowException)
@@ -99,6 +105,14 @@ internal sealed partial class MainTimers
         foreach (var record in items)
             if (!record.Internal && record.Reason is null)
                 Start(record);
+        lock (gate)
+        {
+            // Edits, removal, pause, and an already-settled nomination are reconciled. A
+            // matching record that could not arm is not: preserve its row for recovery.
+            reconciled = !(carried is { } pending && records.TryGetValue(pending.TimerId, out var clock)
+                && !clock.Paused && ScheduleGeneration(clock.Row) == pending.Generation && clock.Clock is null);
+            carried = null;
+        }
         Console.WriteLine(
             $"Timer startup: loaded={items.Length}, scheduled={items.Count(record => !record.Internal && record.Reason is null && !record.Paused)}, paused={items.Count(record => !record.Internal && record.Reason is null && record.Paused)}, inactive={items.Count(record => record.Internal || record.Reason is not null)}."
         );
@@ -124,9 +138,18 @@ internal sealed partial class MainTimers
             )
                 return;
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            first = record.Cron
-                ? new CronSchedule(Text(record.Row["cron"])!, now).Next()
-                : checked((long)Math.Truncate(Number(record.Row["at"])!.Value));
+            if (record.Cron && carried is { } occurrence && occurrence.TimerId == record.Id
+                && occurrence.Generation == ScheduleGeneration(record.Row)
+                && Number(record.Row["settledNomination"]) != occurrence.ScheduledAt)
+            {
+                first = occurrence.ScheduledAt;
+                record.NominatedAt = first;
+                carried = null;
+            }
+            else
+                first = record.Cron
+                    ? new CronSchedule(Text(record.Row["cron"])!, now).Next()
+                    : checked((long)Math.Truncate(Number(record.Row["at"])!.Value));
             record.Next = first;
             record.Clock = completion.Task;
             clocks.Add(completion.Task);
@@ -173,6 +196,7 @@ internal sealed partial class MainTimers
                     await predecessor.WaitAsync(record.StopSource.Token);
                     continue;
                 }
+                var scheduledAt = next;
                 var exhausted = false;
                 if (cron is not null)
                 {
@@ -197,6 +221,11 @@ internal sealed partial class MainTimers
                 TaskCompletionSource? accepted = null;
                 JsonObject? captured = null;
                 var overlapped = false;
+                // Acquire outside the timer lock: the idle latch checks timer activity while
+                // it holds the generation gate. A refused clock leaves its instant pending.
+                var producer = producerAdmission?.TryEnterProducer();
+                if (producerAdmission is not null && producer is null)
+                    break;
                 lock (gate)
                 {
                     var eligible =
@@ -220,9 +249,13 @@ internal sealed partial class MainTimers
                     }
                 }
                 if (accepted is not null)
-                    _ = FireAsync(record, captured!, accepted);
-                else if (overlapped)
-                    await RecordSkippedAsync(record);
+                    _ = FireAsync(record, captured!, accepted, producer, record.NominatedAt == scheduledAt ? scheduledAt : null);
+                else
+                {
+                    using (producer)
+                        if (overlapped)
+                            await RecordSkippedAsync(record);
+                }
                 if (cron is null || exhausted)
                     break;
             }
@@ -243,7 +276,7 @@ internal sealed partial class MainTimers
     private async Task FireAsync(
         TimerRecord record,
         JsonObject captured,
-        TaskCompletionSource accepted
+        TaskCompletionSource accepted, IDisposable? producer, long? nominatedAt
     )
     {
         var firedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -256,10 +289,16 @@ internal sealed partial class MainTimers
             {
                 if (BeforeDelivery is { } before)
                     await before(record.Id);
+                producerAdmission?.StartupAborted.ThrowIfCancellationRequested();
                 var payload = (JsonObject)captured.DeepClone();
                 payload["__timerFiredAt"] = firedAt;
                 outcome = await deliver(payload);
                 delivered = true;
+            }
+            catch (OperationCanceledException) when (producerAdmission?.StartupAborted.IsCancellationRequested == true)
+            {
+                // Startup did not publish. Keep an undelivered one-shot for the next owner.
+                return;
             }
             catch (Exception error)
             {
@@ -289,6 +328,8 @@ internal sealed partial class MainTimers
                             rows.RemoveAt(index);
                             return null;
                         }
+                        if (nominatedAt is long settled)
+                            row["settledNomination"] = settled;
                         if (delivered || TimerArguments.Script(captured))
                             row["lastTriggeredAt"] = firedAt;
                     }
@@ -313,6 +354,7 @@ internal sealed partial class MainTimers
                 if (scriptInvocations.GetValueOrDefault(record.Id) == accepted.Task)
                     scriptInvocations.Remove(record.Id);
             }
+            producer?.Dispose();
             accepted.TrySetResult();
         }
     }

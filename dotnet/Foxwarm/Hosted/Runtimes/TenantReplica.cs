@@ -204,6 +204,9 @@ internal sealed class TenantReplica
             loops.Add(HeartbeatAsync(registry, background.Token));
             loops.Add(ListenAsync(hostnames, background.Token));
             loops.Add(IdleScanAsync(coordinator, background.Token));
+            var wakeups = new Autonomous.Wakeups(app, options.Timings.Ttl, options.Role, options.ReaderVersion, router.MayStartAutonomousAsync,
+                (slug, cause, token) => coordinator.ActivateAsync(slug, cause, token), log);
+            loops.Add(wakeups.RunAsync(background.Token));
             await hostnames.RefreshAsync(stop).ConfigureAwait(false);
             loops.Add(RefreshHostnamesAsync(hostnames, background.Token));
             await using var front = await StartListenerAsync(options.PublicEndpoint, mesh: false, router).ConfigureAwait(false);
@@ -263,7 +266,8 @@ internal sealed class TenantReplica
         var server = new TenantServer(options.PublicUrl(context.Generation.Tenant));
         var built = Interlocked.Read(ref operatorVersion);
         var runtime = await factory(new(context, database, server), token).ConfigureAwait(false);
-        var tenant = new TenantRuntime(this, runtime, server, built);
+        var wakeups = runtime is MainHostRuntime main ? new Autonomous.RuntimeWakeups(main.Host.Sessions, database) : null;
+        var tenant = new TenantRuntime(this, runtime, server, built, wakeups, context.Wakeup is not null, context.Generation);
         lock (gate)
             live.Add(tenant);
         return tenant;
@@ -510,7 +514,7 @@ internal sealed class TenantReplica
     // A built tenant runtime as the activation coordinator drives it. Operator-document changes
     // reach it only once started, one callback at a time; a change during its start is applied
     // when the start ends, and retirement waits for a running callback and stops further ones.
-    private sealed class TenantRuntime(TenantReplica owner, IHostedRuntime runtime, TenantServer server, long builtAt)
+    private sealed class TenantRuntime(TenantReplica owner, IHostedRuntime runtime, TenantServer server, long builtAt, Autonomous.RuntimeWakeups? wakeups, bool pendingWakeup, GenerationId generation)
         : IGenerationRuntime
     {
         private readonly OperatorDocumentCallbacks changes = new(builtAt, () => owner.OperatorVersion, () =>
@@ -538,23 +542,60 @@ internal sealed class TenantReplica
             _ = changes.Start();
         }
 
+        public async Task PublishedAsync(CancellationToken token)
+        {
+            if (!pendingWakeup || wakeups is null) return;
+            // Publication already succeeded. A transient acknowledgement failure leaves the
+            // row for the next epoch's reconciliation, without changing this activation.
+            try { await wakeups.ArmedAsync(token).ConfigureAwait(false); }
+            catch (Exception error) when (!token.IsCancellationRequested)
+            {
+                owner.log("[hosted] Wake-up acknowledgement failed: " + error.Message);
+            }
+        }
+
         internal void OperatorDocumentsChanged() => _ = changes.Notify();
 
-        // Released only once the runtime can report what keeps it busy and what is due; until
-        // then a tenant stays active while its grant renews.
-        public bool Idle => false;
+        public bool Idle => wakeups?.Idle == true;
 
-        public Task StopProducersAsync(CancellationToken token) => Task.CompletedTask;
+        public Task StopProducersAsync(CancellationToken token) => wakeups?.StopProducersAsync() ?? Task.CompletedTask;
 
-        public Task SettleAsync(CancellationToken token) => Task.CompletedTask;
+        public async Task SettleAsync(CancellationToken token)
+        {
+            if (wakeups is null) return;
+            await wakeups.SettleAsync().ConfigureAwait(false);
+            // Stop the host normally: streams close and accepted Session writers drain before
+            // the final catalog read. The tenant storage remains open until runtime disposal.
+            if (runtime is MainHostRuntime main)
+            {
+                await StopCallbacksAsync().ConfigureAwait(false);
+                await main.Host.DisposeAsync().ConfigureAwait(false);
+            }
+        }
 
-        public Task<WakeupDue?> NextDueAsync(CancellationToken token) => Task.FromResult<WakeupDue?>(null);
+        public System.Text.Json.Nodes.JsonObject? RecoveryOccurrence => wakeups?.RecoveryOccurrence;
 
-        public async ValueTask DisposeAsync()
+        public async Task<WakeupDue?> NextDueAsync(CancellationToken token)
+        {
+            if (wakeups is null) return null;
+            try { return await wakeups.NextDueAsync(token).ConfigureAwait(false); }
+            catch (Exception error) when (!token.IsCancellationRequested)
+            {
+                owner.log($"[hosted] Could not read the final wake-up deadline for {generation}; scheduling a recovery: {error.Message}");
+                throw;
+            }
+        }
+
+        private Task StopCallbacksAsync()
         {
             var running = changes.Retire();
             owner.Retired(this);
-            await running.ConfigureAwait(false);
+            return running;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await StopCallbacksAsync().ConfigureAwait(false);
             await runtime.DisposeAsync().ConfigureAwait(false);
         }
     }

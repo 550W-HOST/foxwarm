@@ -10,7 +10,7 @@ namespace Foxwarm.Tests.Hosted;
 // Coalesced activation, exact generations and idle release (plan §2.3),
 // over the real lease rows with runtimes the test drives.
 [Trait("Backend", "postgres")]
-public sealed class TenantActivationsTests
+public sealed partial class TenantActivationsTests
 {
     private const string Tenant = PostgresServer.Tenant;
     private const string Replica = "replica-a/0001";
@@ -66,6 +66,12 @@ public sealed class TenantActivationsTests
             return Task.CompletedTask;
         }
 
+        public Task PublishedAsync(CancellationToken token)
+        {
+            owner.Acknowledged++;
+            return Task.CompletedTask;
+        }
+
         public Task<WakeupDue?> NextDueAsync(CancellationToken token)
         {
             owner.Events.Enqueue("next-due");
@@ -87,6 +93,7 @@ public sealed class TenantActivationsTests
     private sealed class Fixture : IAsyncDisposable
     {
         internal int Builds;
+        internal int Acknowledged;
         internal int Starts;
         internal readonly ConcurrentQueue<string> Events = new();
         internal readonly List<FakeRuntime> Runtimes = [];
@@ -96,6 +103,7 @@ public sealed class TenantActivationsTests
         internal bool Idle = true;
         internal WakeupDue? NextDue;
         internal Exception? BuildFailure;
+        internal Func<ActivationContext, Task>? DuringBuild;
         internal readonly TaskCompletionSource<long> Exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int Exits;
 
@@ -126,6 +134,7 @@ public sealed class TenantActivationsTests
         {
             Interlocked.Increment(ref Builds);
             FactoryEntered.TrySetResult();
+            if (DuringBuild is { } during) await during(context);
             if (BuildFailure is { } failure)
                 throw failure;
             // A factory that ignores cancellation, as a slow composition can.
@@ -186,6 +195,12 @@ public sealed class TenantActivationsTests
             observed.Task.Wait(TimeSpan.FromMilliseconds(200));
         };
         f.Activations.BeforeRegister=()=>observed.Task;
+        f.DuringBuild = context =>
+        {
+            using var refused = context.Gate.TryEnterProducer();
+            Assert.Null(refused);
+            return Task.CompletedTask;
+        };
         await Assert.ThrowsAsync<LeaseRefusedException>(()=>f.Activations.ActivateAsync(Tenant));
         Assert.Null(f.Activations.Current(Tenant));
         Assert.Equal("released",await f.LeaseStateAsync());
@@ -205,6 +220,7 @@ public sealed class TenantActivationsTests
         await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var grant=Assert.Single(f.Activations.Grants());
         f.Activations.SettingsChanged(grant,false);
+        using (var refused = f.Runtimes.Single().Context.Gate.TryEnterProducer()) Assert.Null(refused);
         if (!stuckInStart) behavior.StartGate.TrySetResult();
         await f.Exited.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal("active",await f.LeaseStateAsync());
@@ -375,7 +391,8 @@ public sealed class TenantActivationsTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Activations.ActivateAsync(Tenant));
         Assert.Equal("released", await f.LeaseStateAsync());
         Assert.Null(await f.Database.ScalarAsync("SELECT 1 FROM tenant_wakeups"));
-        // An autonomous activation that fails keeps a row with a backoff, so a scan retries.
+        // A crashed active grant, without a prior wake-up, creates a backoff on failure.
+        await f.Database.ExecuteOwnerAsync("UPDATE tenant_leases SET state='active', expires_at=now()-interval '1 minute'");
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Activations.ActivateAsync(Tenant, ActivationCause.Recovery));
         Assert.Equal(1, await f.Database.ScalarAsync("SELECT attempts FROM tenant_wakeups"));
         Assert.Equal(true, await f.Database.ScalarAsync("SELECT next_attempt_at > now() FROM tenant_wakeups"));
@@ -392,7 +409,7 @@ public sealed class TenantActivationsTests
         await using var f = await CreateAsync();
         var first = await f.Activations.ActivateAsync(Tenant);
         var occurrence = new JsonObject { ["timer"] = "daily", ["at"] = "2026-11-28T09:00:00Z" };
-        f.NextDue = new WakeupDue(new DateTimeOffset(2026, 11, 28, 8, 58, 0, TimeSpan.Zero), occurrence);
+        f.NextDue = new WakeupDue(DateTimeOffset.UtcNow.AddSeconds(-10), occurrence);
 
         // Not idle: admitted work, recent activity, or the runtime's own check.
         using (first.Gate.TryEnter())

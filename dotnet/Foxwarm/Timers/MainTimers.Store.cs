@@ -294,6 +294,7 @@ internal sealed partial class MainTimers : IAsyncDisposable
         internal CancellationTokenSource StopSource = new();
         internal Task? Clock;
         internal long? Next;
+        internal long? NominatedAt;
 
         internal void Stop() => StopSource.Cancel();
     }
