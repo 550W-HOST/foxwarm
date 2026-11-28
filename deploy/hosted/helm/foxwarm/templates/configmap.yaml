@@ -12,5 +12,10 @@ data:
     {{- toYaml $replica | nindent 4 }}
   {{- if .Values.operator.enabled }}
   operator.yaml: |
-    {{- include "foxwarm.deploymentConfig" . | nindent 4 }}
+    {{- $operator := include "foxwarm.deploymentConfig" . | fromYaml -}}
+    {{- if eq (include "foxwarm.s3" .) "true" -}}
+    {{- $_ := set $operator.blobs.s3 "accessKeyIdFile" "/run/secrets/operator/s3-access-key-id" -}}
+    {{- $_ := set $operator.blobs.s3 "secretAccessKeyFile" "/run/secrets/operator/s3-secret-access-key" -}}
+    {{- end -}}
+    {{- toYaml $operator | nindent 4 }}
   {{- end }}

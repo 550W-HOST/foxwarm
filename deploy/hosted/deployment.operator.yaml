@@ -3,5 +3,13 @@
 url: http://{slug}.localhost:3001
 bot: {httpHost: 0.0.0.0, httpPort: 3001}
 health: {port: 3002}
-blobs: {backend: postgres}
+blobs:
+  backend: s3
+  s3:
+    endpoint: http://versitygw:7070
+    region: us-east-1
+    bucket: foxwarm
+    pathStyle: true
+    accessKeyIdFile: /run/secrets/operator-s3-access-key-id
+    secretAccessKeyFile: /run/secrets/operator-s3-secret-access-key
 operator: {url: 'http://operator.localhost:3003', port: 3003}

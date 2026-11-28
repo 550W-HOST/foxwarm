@@ -12,10 +12,23 @@ if [ "${1:-}" = --operator ]; then
   test -f "$dir/kek.json" && test -f "$dir/postgres-password" || { echo 'Generate the base secrets first.' >&2; exit 1; }
   set -C
   umask 022
-  test ! -e "$dir/operator-password" && test ! -e "$dir/operator-database-url" || { echo 'Operator secrets already exist.' >&2; exit 1; }
-  operator="$(random_hex 24)"
-  printf '%s' "$operator" > "$dir/operator-password"
-  printf 'postgres://foxwarm_operator:%s@postgres:5432/foxwarm\n' "$operator" > "$dir/operator-database-url"
+  if [ -f "$dir/operator-password" ] && [ -f "$dir/operator-database-url" ]; then
+    : # Upgrade an existing operator without replacing its database credentials.
+  elif [ ! -e "$dir/operator-password" ] && [ ! -e "$dir/operator-database-url" ]; then
+    operator="$(random_hex 24)"
+    printf '%s' "$operator" > "$dir/operator-password"
+    printf 'postgres://foxwarm_operator:%s@postgres:5432/foxwarm\n' "$operator" > "$dir/operator-database-url"
+  else
+    echo 'Incomplete operator database credentials.' >&2; exit 1
+  fi
+  if [ -f "$dir/operator-s3-access-key-id" ] && [ -f "$dir/operator-s3-secret-access-key" ]; then
+    :
+  elif [ ! -e "$dir/operator-s3-access-key-id" ] && [ ! -e "$dir/operator-s3-secret-access-key" ]; then
+    printf '%s' 'foxwarm-operator-delete' > "$dir/operator-s3-access-key-id"
+    random_hex 24 > "$dir/operator-s3-secret-access-key"
+  else
+    echo 'Incomplete operator S3 credentials.' >&2; exit 1
+  fi
   exit 0
 fi
 dir="${1:?usage: generate-secrets.sh <new directory>}"

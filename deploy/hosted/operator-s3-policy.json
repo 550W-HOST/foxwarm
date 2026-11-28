@@ -1,0 +1,8 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid":"OperatorBucketVersioning","Effect":"Allow","Principal":{"AWS":"foxwarm-operator-delete"},"Action":"s3:GetBucketVersioning","Resource":"arn:aws:s3:::foxwarm"},
+    {"Sid":"OperatorListTenantObjects","Effect":"Allow","Principal":{"AWS":"foxwarm-operator-delete"},"Action":["s3:ListBucket","s3:ListBucketVersions"],"Resource":"arn:aws:s3:::foxwarm","Condition":{"StringLike":{"s3:prefix":"t/*"}}},
+    {"Sid":"OperatorEraseTenantObjects","Effect":"Allow","Principal":{"AWS":"foxwarm-operator-delete"},"Action":["s3:DeleteObject","s3:DeleteObjectVersion"],"Resource":"arn:aws:s3:::foxwarm/t/*"}
+  ]
+}

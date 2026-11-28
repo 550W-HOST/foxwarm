@@ -15,7 +15,7 @@ sh "$here/generate-secrets.sh" "$work/secrets" >/dev/null
 cp -R "$work/secrets" "$work/stack-secrets"
 # compose.yaml names ./secrets; render it from a copy of this directory with generated ones.
 mkdir "$work/stack"
-cp -R "$here/compose.yaml" "$here/deployment.yaml" "$here/deployment.operator.yaml" "$here/haproxy.cfg" "$here/postgres-init" "$here/operator-login.sh" "$here/drills" "$work/stack/"
+cp -R "$here/compose.yaml" "$here/deployment.yaml" "$here/deployment.operator.yaml" "$here/haproxy.cfg" "$here/postgres-init" "$here/operator-login.sh" "$here/operator-s3.sh" "$here/operator-s3-policy.json" "$here/drills" "$work/stack/"
 mv "$work/stack-secrets" "$work/stack/secrets"
 # A pre-operator secrets directory must still satisfy every default service mount.
 legacy="$work/stack/secrets"
