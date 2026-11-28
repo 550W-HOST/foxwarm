@@ -8,7 +8,6 @@ data:
   # FOXWARM_DEPLOYMENT_CONFIG; read at start, so a change rolls the replicas (checksum annotation).
   deployment.yaml: |
     {{- include "foxwarm.deploymentConfig" . | nindent 4 }}
-  {{- if .Values.operator.enabled }}
   operator.yaml: |
     {{- $operator := include "foxwarm.deploymentConfig" . | fromYaml -}}
     {{- if eq (include "foxwarm.s3" .) "true" -}}
@@ -16,4 +15,3 @@ data:
     {{- $_ := set $operator.blobs.s3 "secretAccessKeyFile" "/run/secrets/operator/s3-secret-access-key" -}}
     {{- end -}}
     {{- toYaml $operator | nindent 4 }}
-  {{- end }}

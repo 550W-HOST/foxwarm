@@ -3,6 +3,7 @@ image:
   repository: registry.example.com/foxwarm
   tag: hosted-test
 deployment:
+  url: "https://{slug}.example.test"
   blobs:
     backend: postgres
 secrets:
@@ -12,3 +13,7 @@ migrate:
 
 mesh:
   secretName: foxwarm-mesh
+
+operator:
+  existingSecret: foxwarm-operator
+  url: https://control.example.test

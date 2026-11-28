@@ -22,7 +22,6 @@ migrate:
   databaseUrl: postgres://foxwarm_owner:owner@db.example.com:5432/foxwarm
 
 operator:
-  enabled: true
   existingSecret: foxwarm-operator-connection
   url: https://control.example.test
 

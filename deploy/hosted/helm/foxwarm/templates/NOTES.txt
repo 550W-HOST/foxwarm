@@ -1,8 +1,4 @@
 Foxwarm: {{ .Values.replicaCount }} general replicas behind {{ include "foxwarm.fullname" . }}:{{ .Values.service.port }}.
 
-{{- if .Values.operator.enabled }}
 Provision the first tenant through the operator:
   foxwarm operator --url {{ .Values.operator.url }} --token-file operator.token tenant create {{ .Values.tenant }} hosted {{ (first (splitList ":" (urlParse (replace "{slug}" .Values.tenant .Values.deployment.url)).host)) }}
-{{- else }}
-Configure the operator service to provision tenants and their primary hostnames.
-{{- end }}

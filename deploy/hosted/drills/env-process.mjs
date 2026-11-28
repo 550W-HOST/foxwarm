@@ -28,7 +28,7 @@ export async function processEnvironment(options = {}) {
   const pgLib = join(pgPrefix, 'usr/lib/x86_64-linux-gnu')
   const pgEnv = { ...process.env, LD_LIBRARY_PATH: pgLib, LC_ALL: 'C.UTF-8' }
   const pgPort = await freePort()
-  const superPassword = secret(), ownerPassword = secret(), appPassword = secret()
+  const superPassword = secret(), ownerPassword = secret(), appPassword = secret(), operatorPassword = secret()
   const publicPort = await freePort(), healthPort = await freePort(), meshPort = await freePort()
   const slots = ['r1', 'r2', 'r3']
   const address = slot => `127.0.0.${11 + slots.indexOf(slot)}`
@@ -74,14 +74,15 @@ export async function processEnvironment(options = {}) {
       run(join(pgBin, 'initdb'), ['-D', join(root, 'pg'), '-U', 'postgres', '--auth=scram-sha-256', '--pwfile=' + join(root, 'pw'), '-E', 'UTF8', '--locale-provider=icu', '--icu-locale=und', '--locale=C.UTF-8'])
       rmSync(join(root, 'pw'))
       run(join(pgBin, 'pg_ctl'), ['-D', join(root, 'pg'), '-l', join(root, 'logs', 'postgres.log'), '-w', '-t', '60', '-o', `-p ${pgPort} -k ${root} -c listen_addresses=127.0.0.1 -c max_connections=200 ${options.postgresOptions || ''}`, 'start'])
-      environment.psql([`CREATE ROLE foxwarm_owner LOGIN PASSWORD '${ownerPassword}'`, `CREATE ROLE foxwarm_app LOGIN NOBYPASSRLS PASSWORD '${appPassword}'`, 'CREATE ROLE foxwarm_operator NOLOGIN NOBYPASSRLS', 'CREATE DATABASE foxwarm OWNER foxwarm_owner'], 'postgres')
+      environment.psql([`CREATE ROLE foxwarm_owner LOGIN PASSWORD '${ownerPassword}'`, `CREATE ROLE foxwarm_app LOGIN NOBYPASSRLS PASSWORD '${appPassword}'`, `CREATE ROLE foxwarm_operator LOGIN NOBYPASSRLS PASSWORD '${operatorPassword}'`, 'CREATE DATABASE foxwarm OWNER foxwarm_owner'], 'postgres')
       // VersityGW with a POSIX backend; a bucket is a directory.
       mkdirSync(join(root, 's3', 'foxwarm'), { recursive: true })
       s3Port = await freePort()
       writeFileSync(join(root, 's3-access'), 'drill' + secret().slice(0, 8))
       writeFileSync(join(root, 's3-secret'), secret())
       writeFileSync(join(root, 'mesh-secret'), randomBytes(32).toString('base64'))
-      background('versitygw', versitygw, ['--port', `127.0.0.1:${s3Port}`, 'posix', join(root, 's3')], {
+      mkdirSync(join(root,'iam'))
+      background('versitygw', versitygw, ['--port', `127.0.0.1:${s3Port}`, '--iam-dir', join(root,'iam'), 'posix', join(root, 's3')], {
         ...process.env,
         ROOT_ACCESS_KEY_ID: readFileSync(join(root, 's3-access'), 'utf8'),
         ROOT_SECRET_ACCESS_KEY: readFileSync(join(root, 's3-secret'), 'utf8'),
@@ -94,6 +95,32 @@ export async function processEnvironment(options = {}) {
       front = await roundRobinProxy(() => slots.filter(slot => replicas.get(slot)?.running).map(slot => ({ host: address(slot), port: publicPort })))
       const migrate = await environment.cli(['db', 'migrate'])
       if (migrate.code !== 0) throw new Error('db migrate failed: ' + migrate.stderr + migrate.stdout)
+      // Qualify the same restricted operator identity used in the Compose stack. The
+      // operator stays up for Agent-file inventory, including while replica boots move.
+      const operatorSecrets = join(root, 'operator-secrets')
+      mkdirSync(operatorSecrets, { mode: 0o700 })
+      for (const [name, value] of Object.entries({
+        's3-access-key-id': readFileSync(join(root, 's3-access')),
+        's3-secret-access-key': readFileSync(join(root, 's3-secret')),
+        'operator-s3-access-key-id': 'foxwarm-operator-delete', 'operator-s3-secret-access-key': secret(),
+      })) writeFileSync(join(operatorSecrets,name),value,{ mode: 0o600 })
+      run('sh', [join(here,'../operator-s3.sh')], {...process.env, SECRETS_DIR: operatorSecrets,
+        POLICY_FILE: join(here,'../operator-s3-policy.json'), S3_ENDPOINT: `http://127.0.0.1:${s3Port}` })
+      const operatorPort = await freePort()
+      const operatorConfig = join(root,'deployment-operator.yaml')
+      const base = readFileSync(environment.deployment('r1'),'utf8')
+        .replace(join(root,'s3-access'),join(operatorSecrets,'operator-s3-access-key-id'))
+        .replace(join(root,'s3-secret'),join(operatorSecrets,'operator-s3-secret-access-key'))
+      writeFileSync(operatorConfig, base + `url: 'http://{slug}.test'\noperator: {url: 'http://127.0.0.1:${operatorPort}', port: ${operatorPort}}\n`)
+      const operatorEnvironment = environment.replicaEnv('r1')
+      delete operatorEnvironment.FOXWARM_MIGRATE_DATABASE_URL
+      const operator = background('operator',binary,['operator','serve'], {...operatorEnvironment,
+        FOXWARM_DATABASE_URL: `postgres://foxwarm_operator:${operatorPassword}@127.0.0.1:${pgPort}/foxwarm`,
+        FOXWARM_DEPLOYMENT_CONFIG: operatorConfig, FOXWARM_ROLE: 'operator' })
+      await until(async () => {
+        if (operator.exitCode !== null) throw new Error(`Operator exited ${operator.exitCode}`)
+        return (await fetch(`http://127.0.0.1:${operatorPort}/operator/v1/tenants`)).status === 401
+      }, 'the operator serves with its scoped credentials',10000)
       return migrate
     },
 

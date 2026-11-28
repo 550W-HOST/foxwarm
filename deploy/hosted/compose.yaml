@@ -5,7 +5,7 @@
 #
 #   docker build --target hosted -t foxwarm-hosted:local .     # from the repository root
 #   deploy/hosted/generate-secrets.sh deploy/hosted/secrets
-#   docker compose -f deploy/hosted/compose.yaml --profile operator up -d
+#   docker compose -f deploy/hosted/compose.yaml up -d
 #   See README.md for operator credentials and first-tenant provisioning.
 name: foxwarm-hosted
 
@@ -91,7 +91,6 @@ services:
     restart: "no"
 
   operator-login:
-    profiles: [operator]
     image: postgres:18.7-trixie
     read_only: true
     entrypoint: ["/bin/sh", "/setup/operator-login.sh"]
@@ -104,7 +103,6 @@ services:
         condition: service_completed_successfully
 
   operator-s3:
-    profiles: [operator]
     image: curlimages/curl:8.14.1
     read_only: true
     entrypoint: ["/bin/sh", "/setup/operator-s3.sh"]
@@ -117,7 +115,6 @@ services:
     depends_on: [versitygw]
 
   operator:
-    profiles: [operator]
     image: ${FOXWARM_HOSTED_IMAGE:-foxwarm-hosted:local}
     command: [operator, serve]
     read_only: true

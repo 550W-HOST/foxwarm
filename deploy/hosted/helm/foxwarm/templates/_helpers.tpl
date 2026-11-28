@@ -45,6 +45,9 @@ app.kubernetes.io/component: replica
      mounted S3 credential files, which only the chart sets. */}}
 {{- define "foxwarm.deploymentConfig" -}}
 {{- $config := deepCopy .Values.deployment -}}
+{{- if not (contains "{slug}" (default "" $config.url)) -}}
+{{- fail "deployment.url must contain {slug} for tenant provisioning" -}}
+{{- end -}}
 {{- $bot := dig "bot" dict $config -}}
 {{- $_ := set $bot "httpHost" "0.0.0.0" -}}
 {{- $_ := set $bot "httpPort" (int .Values.ports.http) -}}
@@ -62,9 +65,7 @@ app.kubernetes.io/component: replica
 {{- /* The values' default S3 block doesn't apply to another backend. */ -}}
 {{- $_ := unset $config.blobs "s3" -}}
 {{- end -}}
-{{- if .Values.operator.enabled -}}
 {{- $_ := set $config "operator" (dict "url" (required "operator.url is required" .Values.operator.url) "port" (int .Values.operator.port)) -}}
-{{- end -}}
 {{- toYaml $config -}}
 {{- end -}}
 

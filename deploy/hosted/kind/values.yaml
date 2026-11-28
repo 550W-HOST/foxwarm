@@ -4,6 +4,7 @@ image:
   # The image is loaded into the kind node, not pulled.
   pullPolicy: Never
 deployment:
+  url: "http://{slug}.test"
   blobs:
     backend: s3
     s3:
@@ -14,3 +15,7 @@ deployment:
 
 mesh:
   secretName: foxwarm-mesh
+
+operator:
+  existingSecret: foxwarm-operator
+  url: http://control.test:3003

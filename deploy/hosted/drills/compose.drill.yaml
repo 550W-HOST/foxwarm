@@ -89,6 +89,10 @@ volumes:
   source: {}
 
 secrets:
+  operator-s3-access-key-id:
+    file: ${FOXWARM_DRILL_SECRETS:?}/operator-s3-access-key-id
+  operator-s3-secret-access-key:
+    file: ${FOXWARM_DRILL_SECRETS:?}/operator-s3-secret-access-key
   mesh-secret:
     file: ${FOXWARM_DRILL_SECRETS:?}/mesh-secret
   postgres-password:

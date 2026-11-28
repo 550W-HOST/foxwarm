@@ -145,7 +145,7 @@ function ownershipMonitor() {
  */
 async function serviceProbe(token, seconds) {
   const count = Math.round(seconds * 4)
-  const request = `GET /api/sessions HTTP/1.1\\r\\nHost: ${release}\\r\\nAuthorization: Bearer %s\\r\\nConnection: close\\r\\n\\r\\n`
+  const request = `GET /api/sessions HTTP/1.1\\r\\nHost: default.test\\r\\nAuthorization: Bearer %s\\r\\nConnection: close\\r\\n\\r\\n`
   const script = [
     `for i in $(seq ${count}); do`,
     '  started=$(date +%s%3N)',
@@ -180,13 +180,23 @@ try {
   const secrets = path.join(work, 'secrets')
   await run('sh', [path.join(hosted, 'generate-secrets.sh'), secrets])
   const file = name => path.join(secrets, name)
-  await kubectl(['create', 'secret', 'generic', 'fixture-secrets', ...['postgres-password', 'owner-password', 'app-password', 's3-access-key-id', 's3-secret-access-key'].map(name => `--from-file=${name}=${file(name)}`)])
+  await kubectl(['create', 'secret', 'generic', 'fixture-secrets', ...['postgres-password', 'owner-password', 'app-password', 'operator-password', 's3-access-key-id', 's3-secret-access-key', 'operator-s3-access-key-id', 'operator-s3-secret-access-key'].map(name => `--from-file=${name}=${file(name)}`)])
   await kubectl(['create', 'secret', 'generic', 'foxwarm-mesh', `--from-file=mesh-secret=${file('mesh-secret')}`])
+  await kubectl(['create', 'secret', 'generic', 'foxwarm-operator',
+    `--from-file=database-url=${file('operator-database-url')}`, `--from-file=kek.json=${file('kek.json')}`,
+    `--from-file=s3-access-key-id=${file('operator-s3-access-key-id')}`, `--from-file=s3-secret-access-key=${file('operator-s3-secret-access-key')}`])
+  await kubectl(['create', 'configmap', 'operator-s3-setup', ...['operator-s3.sh','operator-s3-policy.json'].map(name=>`--from-file=${path.join(hosted,name)}`)])
   await kubectl(['create', 'configmap', 'postgres-init', `--from-file=${path.join(hosted, 'postgres-init', '10-foxwarm-roles.sh')}`])
   await kubectl(['apply', '-f', path.join(here, 'fixtures.yaml')])
   await kubectl(['rollout', 'status', 'deploy/postgres', '--timeout', '240s'])
   await kubectl(['rollout', 'status', 'deploy/versitygw', '--timeout', '240s'])
-  log('kind: cluster up; PostgreSQL and VersityGW ready')
+  await kubectl(['exec','deploy/postgres','--','sh','-c',
+    `export OPERATOR_PASSWORD="$(cat /run/secrets/operator-password)"; psql -X -U postgres -d foxwarm -v ON_ERROR_STOP=1 <<'SQL'
+\\getenv op_password OPERATOR_PASSWORD
+ALTER ROLE foxwarm_operator LOGIN PASSWORD :'op_password';
+SQL`])
+  await kubectl(['wait','--for=condition=complete','job/operator-s3-setup','--timeout=120s'])
+  log('kind: PostgreSQL and VersityGW ready; operator login and bucket permissions installed')
 
   // ---- install
   const split = image.lastIndexOf(':')
@@ -227,7 +237,7 @@ try {
   // boot; the tenant lease identifies the owner and its epoch.
   await psql(`WITH t AS (INSERT INTO tenants(name) VALUES ('default') RETURNING tenant_id)
     INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM t;
-    INSERT INTO tenant_hostnames(tenant_id,hostname,kind) SELECT tenant_id,'${release}','primary' FROM tenants WHERE name='default'`)
+    INSERT INTO tenant_hostnames(tenant_id,hostname,kind) SELECT tenant_id,'default.test','primary' FROM tenants WHERE name='default'`)
   await serviceProbe('',1)
   const roles = await until(async () => {
     const rows = await statuses(), grant = await lease()
@@ -310,7 +320,7 @@ try {
   const after = await lease()
   assert(after.epoch === next.epoch && after.owner === next.replica && after.state === 'active', 'the lease names the new owner at its epoch')
   assert(monitor.violations.length === 0, 'one owner at a time: ' + JSON.stringify(monitor.violations))
-  // A deleted owner stops gracefully: it drains, releases the lease and exits 0, and the standby
+  // A deleted owner stops gracefully: it drains, releases the lease and exits 0, and a surviving pod
   // takes the released lease well before the TTL (30 s) could expire it.
   const terminated = stop.termination.map(entry => entry.event.split(' ')).find(fields => /^\d+$/.test(fields[1] ?? ''))
   assert(terminated, 'the deleted owner\'s container termination was observed')

@@ -79,6 +79,7 @@ export async function composeEnvironment() {
       await must(['up', '-d', '--wait', 'postgres', 'versitygw', 'mock-llm', 'proxy'])
       await until(() => getJson(environment.mockUrl + '/__drill/requests').catch(() => null), 'the mock model listens', 30000)
       const migrate = await must(['run', '--rm', 'migrate'])
+      await must(['up', '-d', 'operator'])
       return migrate
     },
 

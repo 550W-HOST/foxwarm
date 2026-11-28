@@ -29,6 +29,9 @@ if [ "${1:-}" = --operator ]; then
   else
     echo 'Incomplete operator S3 credentials.' >&2; exit 1
   fi
+  if [ ! -e "$dir/mesh-secret" ]; then
+    head -c 32 /dev/urandom | base64 > "$dir/mesh-secret"
+  fi
   exit 0
 fi
 dir="${1:?usage: generate-secrets.sh <new directory>}"
@@ -53,4 +56,5 @@ printf 'fw%s' "$(random_hex 8)" > "$dir/s3-access-key-id"
 random_hex 20 > "$dir/s3-secret-access-key"
 head -c 32 /dev/urandom | base64 > "$dir/mesh-secret"
 chmod 0644 "$dir"/*
+sh "$0" --operator "$dir"
 echo "Wrote the secrets to $dir."

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Opt-in Compose job, including upgrades of initialized volumes. The operator service
+# Compose setup job, including upgrades of initialized volumes. The operator service
 # never receives the database administrator credential used to enable its login.
 set -eu
 export PGPASSWORD="$(cat /run/secrets/postgres-password)"

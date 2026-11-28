@@ -29,7 +29,7 @@ case $status in
   *) echo "Cannot read the bucket policy (HTTP $status)." >&2; exit 1;;
 esac
 access=$user; secret=$password
-for query in 'versioning' 'list-type=2&prefix=t%2F&max-keys=1'; do
+for query in 'versioning' 'list-type=2&prefix=t%2F&max-keys=1' 'versions&prefix=t%2F&max-keys=1'; do
   status=$(signed "$endpoint/foxwarm?$query")
   [ "$status" = 200 ] || { echo "Operator S3 access was refused (HTTP $status). Merge the operator statements into the bucket policy." >&2; exit 1; }
 done

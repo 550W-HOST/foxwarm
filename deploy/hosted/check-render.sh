@@ -17,11 +17,10 @@ cp -R "$work/secrets" "$work/stack-secrets"
 mkdir "$work/stack"
 cp -R "$here/compose.yaml" "$here/deployment.yaml" "$here/deployment.operator.yaml" "$here/haproxy.cfg" "$here/postgres-init" "$here/operator-login.sh" "$here/operator-s3.sh" "$here/operator-s3-policy.json" "$here/drills" "$work/stack/"
 mv "$work/stack-secrets" "$work/stack/secrets"
-# A pre-operator secrets directory must still satisfy every default service mount.
-legacy="$work/stack/secrets"
-test ! -e "$legacy/operator-password" && test ! -e "$legacy/operator-database-url"
+# Fresh stacks include the required operator and its scoped credentials.
 docker compose -f "$work/stack/compose.yaml" config --format json | node -e '
   const fs = require("node:fs"); const config = JSON.parse(fs.readFileSync(0, "utf8"));
+  if (!config.services.operator) throw Error("Missing operator service");
   for (const service of Object.values(config.services)) for (const {source} of service.secrets || []) fs.accessSync(config.secrets[source].file);
 '
 docker compose -f "$work/stack/compose.yaml" --profile master config --format json | node -e '
@@ -33,8 +32,6 @@ docker compose -f "$work/stack/compose.yaml" --profile master config --format js
   for (const name of ["foxwarm-1", "foxwarm-2"]) if (config.services[name].volumes.some(v => v.source === "master"))
     throw new Error(`${name} mounts the operator volume`);
 '
-sh "$here/generate-secrets.sh" --operator "$legacy"
-docker compose -f "$work/stack/compose.yaml" --profile operator config --quiet
 echo "compose: compose.yaml renders"
 FOXWARM_DRILL_SECRETS="$work/secrets" docker compose -f "$work/stack/compose.yaml" -f "$work/stack/drills/compose.drill.yaml" --profile drill config --quiet
 echo "compose: compose.yaml with drills/compose.drill.yaml renders"
@@ -73,12 +70,13 @@ for values in "$chart"/ci/*-values.yaml; do
   awk '/^  deployment.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/$name.deployment.yaml"
   test -s "$work/$name.deployment.yaml"
   parse "$work/$name.deployment.yaml"
-  if grep -q '  operator.yaml: |' "$work/$name.yaml"; then
+  grep -q '  operator.yaml: |' "$work/$name.yaml"
+  {
     grep -Fq '{slug}' "$work/$name.deployment.yaml"
     awk '/^  operator.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/operator-config.yaml"
     grep -Fq '{slug}' "$work/operator-config.yaml"
     parse "$work/operator-config.yaml"
-  fi
+  }
   if grep -q '^  name: foxwarm-master$' "$work/$name.yaml"; then
     helm template foxwarm "$chart" -f "$values" --show-only templates/master.yaml > "$work/master.yaml"
     grep -qx 'kind: StatefulSet' "$work/master.yaml"

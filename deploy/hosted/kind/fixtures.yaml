@@ -46,6 +46,7 @@ spec:
               - {key: postgres-password, path: postgres-password}
               - {key: owner-password, path: owner-password}
               - {key: app-password, path: app-password}
+              - {key: operator-password, path: operator-password}
         - name: init
           configMap:
             name: postgres-init
@@ -84,7 +85,7 @@ spec:
               mkdir -p /data/foxwarm &&
               ROOT_ACCESS_KEY_ID="$(cat /run/secrets/s3-access-key-id)"
               ROOT_SECRET_ACCESS_KEY="$(cat /run/secrets/s3-secret-access-key)"
-              exec versitygw --port :7070 posix /data
+              exec versitygw --port :7070 --iam-dir /iam posix /data
           ports:
             - containerPort: 7070
           readinessProbe:
@@ -97,6 +98,7 @@ spec:
               readOnly: true
             - name: data
               mountPath: /data
+            - {name: iam, mountPath: /iam}
       volumes:
         - name: secrets
           secret:
@@ -106,6 +108,7 @@ spec:
               - {key: s3-secret-access-key, path: s3-secret-access-key}
         - name: data
           emptyDir: {}
+        - {name: iam, emptyDir: {}}
 ---
 apiVersion: v1
 kind: Service
@@ -115,3 +118,31 @@ spec:
   selector: {app: versitygw}
   ports:
     - port: 7070
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: operator-s3-setup
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      containers:
+        - name: setup
+          image: curlimages/curl:8.14.1
+          command: [/bin/sh, /setup/operator-s3.sh]
+          volumeMounts:
+            - {name: setup, mountPath: /setup, readOnly: true}
+            - {name: credentials, mountPath: /run/secrets, readOnly: true}
+      volumes:
+        - name: setup
+          configMap: {name: operator-s3-setup}
+        - name: credentials
+          secret:
+            secretName: fixture-secrets
+            items:
+              - {key: s3-access-key-id, path: s3-access-key-id}
+              - {key: s3-secret-access-key, path: s3-secret-access-key}
+              - {key: operator-s3-access-key-id, path: operator-s3-access-key-id}
+              - {key: operator-s3-secret-access-key, path: operator-s3-secret-access-key}

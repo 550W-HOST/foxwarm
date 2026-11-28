@@ -6,7 +6,7 @@
 # Leave the replica URL unset so Node bootstrap uses the validated tenant request origin.
 # The operator service assigns <slug>.localhost in deployment.operator.yaml.
 
-# Reserve the optional operator service's hostname on the tenant listener.
+# Reserve the operator service's hostname on the tenant listener.
 operator: {url: 'http://operator.localhost:3003', port: 3003}
 
 bot:
