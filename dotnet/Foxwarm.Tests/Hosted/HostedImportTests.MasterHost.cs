@@ -26,7 +26,7 @@ public sealed partial class HostedImportTests
     [Fact]
     public async Task Operator_import_copies_physical_files_and_keeps_the_operators_configuration()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsLinux()) return;
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
         var volume = Directory.CreateDirectory(Path.Combine(temp.Path, "volume")).FullName;
@@ -73,6 +73,19 @@ public sealed partial class HostedImportTests
         Assert.Equal("ops", await hosts.ResolveAsync("ops.example.test", default));
     }
 
+    [Fact]
+    public async Task Operator_import_refuses_when_the_platform_cannot_sync_directories()
+    {
+        if (OperatingSystem.IsLinux()) return;
+        var server = await PostgresServer.SharedAsync();
+        await using var db = await server.CreateDatabaseAsync();
+        var volume = Directory.CreateDirectory(Path.Combine(temp.Path, "volume")).FullName;
+        var result = await OperatorCli(db, "ops", volume);
+        Assert.Equal(HostedImport.Refused, result.Code);
+        Assert.Contains("does not support syncing directories", result.Output);
+        Assert.Equal(0L, await db.ScalarAsync("SELECT count(*) FROM tenants WHERE name='ops'"));
+    }
+
     [Theory]
     [InlineData("empty")]
     [InlineData("concurrent-file")]
@@ -80,7 +93,7 @@ public sealed partial class HostedImportTests
     [InlineData("lost-lease")]
     public async Task Physical_Agent_files_publish_only_under_the_final_grant(string condition)
     {
-        if (OperatingSystem.IsWindows()) return; // The master-host image uses POSIX directory rename.
+        if (!OperatingSystem.IsLinux()) return; // A successful publication requires Linux directory sync.
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
         var volume = Directory.CreateDirectory(Path.Combine(temp.Path, "volume")).FullName;
@@ -155,6 +168,7 @@ public sealed partial class HostedImportTests
     [Fact]
     public async Task Operator_import_refuses_another_profile_a_second_operator_and_a_nonempty_volume()
     {
+        if (!OperatingSystem.IsLinux()) return;
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
         var volume = Directory.CreateDirectory(Path.Combine(temp.Path, "volume")).FullName;

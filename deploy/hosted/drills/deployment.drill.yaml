@@ -1,9 +1,6 @@
 # Deployment configuration of the drills on the Compose stack (compose.drill.yaml): the stack's
 # deployment.yaml plus the one egress exception the drills need. Keep the rest equal to it.
 
-# The public address users open (the proxy's published port).
-url: http://localhost:3001
-
 bot:
   # The public listener of each replica; the proxy connects to it.
   httpHost: 0.0.0.0
