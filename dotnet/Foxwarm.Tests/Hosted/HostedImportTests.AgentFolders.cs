@@ -56,7 +56,7 @@ public sealed partial class HostedImportTests
     {
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
-        const string edit = "UPDATE tenants SET profile = 'operator'";
+        const string edit = "UPDATE tenants SET profile = 'operator', pinned_role = 'master-host'";
         if (!changeDuringCopy)
             await db.ExecuteOwnerAsync(edit);
         var changed = false;

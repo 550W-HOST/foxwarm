@@ -90,7 +90,7 @@ internal static class ReplicaRoles
     internal static bool MayServe(string role, TenantProfile profile, string? pinnedRole) =>
         role switch
         {
-            MasterHost => profile == TenantProfile.Operator,
+            MasterHost => profile == TenantProfile.Operator && pinnedRole == MasterHost,
             General => profile == TenantProfile.Hosted && pinnedRole is null,
             _ => false,
         };
@@ -360,7 +360,8 @@ internal sealed class TenantLease
         TimeSpan lockTimeout,
         CancellationToken token,
         ImportKind kind = ImportKind.Full,
-        string? agentPlan = null
+        string? agentPlan = null,
+        TenantProfile profile = TenantProfile.Hosted
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
@@ -379,15 +380,23 @@ internal sealed class TenantLease
             if (kind != ImportKind.Full)
                 return null;
             await using var create = new NpgsqlCommand(
-                "WITH created AS (INSERT INTO tenants (name, state) VALUES ($1, 'importing')"
+                "WITH created AS (INSERT INTO tenants (name, state, profile, pinned_role) VALUES ($1, 'importing', $2, CASE WHEN $2 = 'operator' THEN 'master-host' END)"
                     + " ON CONFLICT (name) DO NOTHING RETURNING tenant_id)"
                     + " INSERT INTO tenant_leases (tenant_id) SELECT tenant_id FROM created RETURNING tenant_id",
                 connection,
                 transaction
             );
             create.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
-            if (await create.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
-                return null;
+            create.Parameters.Add(new NpgsqlParameter<string> { TypedValue = TenantProfiles.Name(profile) });
+            try
+            {
+                if (await create.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+                    return null;
+            }
+            catch (PostgresException error) when (error.SqlState == "23505" && error.ConstraintName == "tenants_one_operator")
+            {
+                throw new LeaseRefusedException("This deployment already has an operator tenant.");
+            }
         }
         long epoch;
         try
@@ -415,8 +424,8 @@ internal sealed class TenantLease
                 };
                 if (!admitted)
                     return null;
-                if (row.GetString(1) != "hosted")
-                    throw new LeaseRefusedException("The tenant keeps its Agent files on master: " + Tenant);
+                if (row.GetString(1) != TenantProfiles.Name(profile))
+                    throw new LeaseRefusedException(ImportProfileMismatch(profile, Tenant));
                 RequireReader(row.GetInt32(2));
                 if (kind == ImportKind.Agents && state == "importing-agents" && (row.IsDBNull(3) || !row.GetBoolean(3)))
                     throw new LeaseRefusedException("The source plan differs from the incomplete Agent import. Retry with the original volume or abandon the incomplete import first.");
@@ -462,8 +471,44 @@ internal sealed class TenantLease
             epoch = reader.GetInt64(1);
         }
         await transaction.CommitAsync(token).ConfigureAwait(false);
-        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart };
+        return new(tenantId, Tenant, replica, epoch) { AcquisitionStart = acquisitionStart, Profile = profile };
     }
+
+    // The import job hands an interrupted full operator import to the operator service's
+    // deletion worker. It has no operator API credential and does not erase structured data.
+    internal async Task<(int Id, long Epoch)> AbandonOperatorImportAsync(Action<int> removeStaging)
+    {
+        await using var connection = await database.OpenAsync(default);
+        await using var tx = await connection.BeginTransactionAsync();
+        int id;
+        await using (var target = new NpgsqlCommand(
+            "SELECT tenant_id, profile, state, min_reader_version FROM tenants WHERE name = $1 FOR UPDATE", connection, tx))
+        {
+            target.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
+            await using var row = await target.ExecuteReaderAsync();
+            if (!await row.ReadAsync() || row.GetString(1) != "operator" || row.GetString(2) != "importing")
+                throw new LeaseRefusedException("Tenant " + Tenant + " isn't an incomplete operator import.");
+            id = row.GetInt32(0);
+            RequireReader(row.GetInt32(3));
+        }
+        await using var mark = new NpgsqlCommand(
+            "UPDATE tenant_leases SET epoch = epoch + 1, deletion_epoch = epoch + 1, owner_replica = NULL,"
+                + " state = 'released', expires_at = now(), draining_since = now()"
+                + " WHERE tenant_id = $1 AND (state = 'released' OR expires_at <= now()) RETURNING epoch", connection, tx);
+        mark.Parameters.Add(new NpgsqlParameter<int> { TypedValue = id });
+        if (await mark.ExecuteScalarAsync() is not long epoch)
+            throw new LeaseRefusedException("This import is still running. Stop it, then abandon it.");
+        await using var change = new NpgsqlCommand("UPDATE tenants SET state = 'deleting' WHERE tenant_id = $1", connection, tx);
+        change.Parameters.Add(new NpgsqlParameter<int> { TypedValue = id });
+        await change.ExecuteNonQueryAsync();
+        removeStaging(id);
+        await tx.CommitAsync();
+        return (id, epoch);
+    }
+
+    internal static string ImportProfileMismatch(TenantProfile expected, string slug) => expected == TenantProfile.Hosted
+        ? "The tenant keeps its Agent files on master: " + slug
+        : $"Tenant {slug} has the hosted profile. Import without --profile operator, or into this deployment's operator tenant.";
 
     /// <summary>
     /// Ends an import: marks the tenant <c>active</c> and releases the lease in one transaction,
@@ -471,7 +516,7 @@ internal sealed class TenantLease
     /// no longer holds the lease, so an import that lost it never activates the tenant. Needs
     /// the migrating role, like <see cref="TryAcquireForImportAsync"/>.
     /// </summary>
-    internal async Task ActivateImportAsync(LeaseGrant grant, CancellationToken token, ImportKind kind = ImportKind.Full)
+    internal async Task ActivateImportAsync(LeaseGrant grant, CancellationToken token, ImportKind kind = ImportKind.Full, Action? publish = null)
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
@@ -483,12 +528,12 @@ internal sealed class TenantLease
         ))
         {
             tenantRow.Parameters.Add(new NpgsqlParameter<int> { TypedValue = grant.TenantId });
-            if (await tenantRow.ExecuteScalarAsync(token).ConfigureAwait(false) is not "hosted")
-                throw new LeaseRefusedException("The tenant keeps its Agent files on master: " + Tenant);
+            if (!Equals(await tenantRow.ExecuteScalarAsync(token).ConfigureAwait(false), TenantProfiles.Name(grant.Profile)))
+                throw new LeaseRefusedException(ImportProfileMismatch(grant.Profile, Tenant));
         }
         await using (var held = new NpgsqlCommand(
             "SELECT 1 FROM tenant_leases WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3"
-                + " AND state = 'active' AND expires_at > now() FOR UPDATE",
+                + " AND state = 'active' FOR UPDATE",
             connection,
             transaction
         ))
@@ -500,7 +545,8 @@ internal sealed class TenantLease
                 throw new TenantFencedException("The import no longer holds the tenant lease.");
         }
         await using var activate = new NpgsqlCommand(
-            "WITH activated AS (UPDATE tenants SET state = 'active', agent_import_plan = NULL WHERE tenant_id = $1 AND state = $3 RETURNING tenant_id),"
+            "WITH activated AS (UPDATE tenants SET state = 'active', agent_import_plan = NULL WHERE tenant_id = $1 AND state = $3"
+                + " AND EXISTS (SELECT 1 FROM tenant_leases WHERE tenant_id=$1 AND expires_at > clock_timestamp()) RETURNING tenant_id),"
                 + " released AS (UPDATE tenant_leases SET state = 'released', expires_at = now()"
                 + " WHERE tenant_id IN (SELECT tenant_id FROM activated) RETURNING tenant_id)"
                 + " SELECT tenant_id, pg_notify($2, tenant_id::text) FROM released",
@@ -512,7 +558,19 @@ internal sealed class TenantLease
         activate.Parameters.Add(new NpgsqlParameter<string> { TypedValue = kind == ImportKind.Full ? "importing" : "importing-agents" });
         if (await activate.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
             throw new TenantFencedException("The tenant is not in the expected import state.");
-        await transaction.CommitAsync(token).ConfigureAwait(false);
+        // Publish a verified physical tree by same-volume rename while both rows are locked.
+        token.ThrowIfCancellationRequested();
+        publish?.Invoke();
+        token.ThrowIfCancellationRequested();
+        try
+        {
+            // Once COMMIT is sent, cancellation cannot establish whether activation happened.
+            await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception error) when (TenantDb.IsLostCommit(error))
+        {
+            throw new CommitOutcomeUnknownException($"The activation COMMIT was not acknowledged. Inspect tenant {Tenant} (ID {grant.TenantId}, import epoch {grant.Epoch}) before retrying or abandoning the import.", error);
+        }
     }
 
     /// <summary>

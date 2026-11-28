@@ -917,7 +917,7 @@ public sealed partial class TenantActivationsTests
         f.For(Tenant).FactoryGate = Fixture.Closed();
         var activation = f.Activations.ActivateAsync(Tenant);
         await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator' WHERE name = '{Tenant}'");
+        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator', pinned_role = 'master-host' WHERE name = '{Tenant}'");
         f.For(Tenant).FactoryGate.SetResult();
         TenantGeneration? generation = null;
         try
@@ -939,7 +939,7 @@ public sealed partial class TenantActivationsTests
         var generation = await f.Activations.ActivateAsync(Tenant);
         await Task.Delay(Short.RenewInterval * 2);
         Assert.False(generation.IsFenced);
-        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET pinned_role = 'master-host' WHERE name = '{Tenant}'");
+        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator', pinned_role = 'master-host' WHERE name = '{Tenant}'");
         await UntilAsync(() => generation.IsFenced, Short.Ttl, "the generation kept renewing under a pin its role doesn't allow");
     }
 
@@ -1017,7 +1017,7 @@ public sealed partial class TenantActivationsTests
         var activation = f.Activations.ActivateAsync(Tenant);
         await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         // The profile changes after the acquisition, before the build reads anything.
-        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator' WHERE name = '{Tenant}'");
+        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator', pinned_role = 'master-host' WHERE name = '{Tenant}'");
         f.For(Tenant).FactoryGate.SetResult();
         var generation = await activation.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(TenantProfile.Hosted, generation.Grant.Profile);
@@ -1028,7 +1028,7 @@ public sealed partial class TenantActivationsTests
     public async Task AGeneralReplicaRefusesAnOperatorTenantWithoutTouchingItsLease()
     {
         await using var f = await CreateAsync(Bound);
-        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator' WHERE name = '{Tenant}'");
+        await f.Database.ExecuteOwnerAsync($"UPDATE tenants SET profile = 'operator', pinned_role = 'master-host' WHERE name = '{Tenant}'");
         var epoch = await f.EpochAsync();
         await Assert.ThrowsAsync<TenantNotEligibleException>(() => f.Activations.ActivateAsync(Tenant));
         Assert.Equal(epoch, await f.EpochAsync());

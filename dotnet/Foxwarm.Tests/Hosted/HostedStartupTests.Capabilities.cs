@@ -213,7 +213,7 @@ public sealed partial class HostedStartupTests
     {
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
-        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator'");
+        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'operator', pinned_role = 'master-host'");
         using var temp = new TempDirectory();
         var files = HostedFiles.Create(temp.Path);
         // A general replica may not take an operator-profile tenant: its one tenant can't be
@@ -245,12 +245,11 @@ public sealed partial class HostedStartupTests
         );
         var terminals = await client.GetFromJsonAsync<JsonNode>("api/terminals");
         Assert.True(terminals!["supported"]!.GetValue<bool>());
-        Assert.NotEqual(
-            HttpStatusCode.NotFound,
-            (await client.GetAsync("api/vscode-web/fs/workspace-roots")).StatusCode
-        );
+        var roots = await client.GetFromJsonAsync<JsonObject>("api/vscode-web/fs/workspace-roots");
+        Assert.Equal("master", roots!["roots"]!["data"]!["nodeId"]!.GetValue<string>());
+        Assert.Null(roots["configFiles"]); // PostgreSQL locators are not editable master paths.
         // Changed while the runtime runs: the running runtime keeps its capabilities.
-        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'hosted'");
+        await database.ExecuteOwnerAsync("UPDATE tenants SET profile = 'hosted', pinned_role = NULL");
         Assert.Equal(Foxwarm.Net.EgressProfile.Operator, sessions.Capabilities.Egress.Profile);
         Assert.True(sessions.Capabilities.MasterNode);
         replica.Stop.Cancel();

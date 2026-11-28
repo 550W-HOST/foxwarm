@@ -18,7 +18,7 @@ public sealed class ForwardedWebUiTests
     {
         await using var cluster = await ReplicaProcessHarness.CreateAsync();
         await cluster.AddTenantAsync("operator");
-        await cluster.Database.ExecuteOwnerAsync("UPDATE tenants SET profile='operator' WHERE name='operator'");
+        await cluster.Database.ExecuteOwnerAsync("UPDATE tenants SET profile='operator',pinned_role='master-host' WHERE name='operator'");
         var owner = await cluster.StartAsync("owner", new Dictionary<string,string> { ["FOXWARM_ROLE"] = "master-host" });
         using (var warm = await owner.GetAsync("operator")) Assert.Equal(HttpStatusCode.Unauthorized, warm.StatusCode);
         var edge = await cluster.StartAsync("edge");

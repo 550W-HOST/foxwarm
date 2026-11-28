@@ -51,5 +51,6 @@ key="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
 printf '{"version":1,"keyId":"%s","key":"%s"}\n' "$(random_hex 8)" "$key" > "$dir/kek.json"
 printf 'fw%s' "$(random_hex 8)" > "$dir/s3-access-key-id"
 random_hex 20 > "$dir/s3-secret-access-key"
+head -c 32 /dev/urandom | base64 > "$dir/mesh-secret"
 chmod 0644 "$dir"/*
 echo "Wrote the secrets to $dir."

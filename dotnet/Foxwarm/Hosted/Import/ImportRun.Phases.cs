@@ -46,6 +46,7 @@ internal sealed partial class ImportRun
     private Microsoft.Data.Sqlite.SqliteConnection? Copy(string file) => copies.GetValueOrDefault(file);
 
     private AgentFolderImport? agentFolders;
+    private PhysicalAgentImport? physicalFolders;
 
     // ---- Plan ----
 
@@ -56,10 +57,13 @@ internal sealed partial class ImportRun
         var (frontier, other) = source.SessionDirectoryLeftovers();
         var (root, required) = AgentFolderImport.SourceRoot(source.Root, config?.Source, options.AgentsDirectory);
         report.Root["source"]!["agentsDirectory"] = root;
-        agentFolders = AgentFolderImport.Scan(root, AgentStoreLimits.Default.FileBytes, report, required);
+        if (options.Profile == TenantProfile.Operator)
+            physicalFolders = PhysicalAgentImport.Scan(root, required, options.AgentsVolume, source.Root, report);
+        else
+            agentFolders = AgentFolderImport.Scan(root, AgentStoreLimits.Default.FileBytes, report, required);
         var plan = new JsonObject
         {
-            ["agentFiles"] = agentFolders.FileCount,
+            ["agentFiles"] = physicalFolders?.FileCount ?? agentFolders!.FileCount,
             ["catalogRows"] = sourceCatalog?.List().Length ?? 0,
             ["sessionDocuments"] = documents,
             ["archiveMessages"] = Rows("archive-store.sqlite", ArchiveMessages),
@@ -177,7 +181,7 @@ internal sealed partial class ImportRun
         }
         if (source.ReadJson("state/migrationVersion.json") is not null)
             report.NotImported("file-mode migration markers (state/migrationVersion.json)", 1, "Hosted schema versions are tracked by `foxwarm db migrate`.");
-        if (source.ReadText("state/mcp.json") is { } mcp && JsonNode.Parse(mcp)?["servers"] is JsonObject servers)
+        if (options.Profile == TenantProfile.Hosted && source.ReadText("state/mcp.json") is { } mcp && JsonNode.Parse(mcp)?["servers"] is JsonObject servers)
             foreach (var (name, server) in servers)
                 if (SessionWait.Text(server?["transport"]) == "stdio")
                     report.Warn($"MCP server {name} uses the stdio transport, which hosted mode refuses; it is dropped from the tenant's MCP document.");
@@ -194,7 +198,7 @@ internal sealed partial class ImportRun
             return 1;
         });
         await StepAsync("agent metadata", () => AgentDocuments.Sum(document => CopyDocument(document.Name, document.File)));
-        await StepAsync("agent files", () => agentFolders!.WriteAsync(Hosted.AgentFiles, Token));
+        await StepAsync("agent files", () => physicalFolders is null ? agentFolders!.WriteAsync(Hosted.AgentFiles, Token) : physicalFolders.StageAsync(Db.TenantId, Token));
         await StepAsync("catalog", ImportCatalog);
         await StepAsync("session documents", ImportSessionDocuments);
         await StepAsync("archive", ImportArchive);
@@ -465,7 +469,7 @@ internal sealed partial class ImportRun
                     openTextRedaction: key => Hosted.OpenTextRedaction(key)
                 ),
                 Hosted.Credentials
-            )
+            ) { Profile = options.Profile }
         );
         long count = 0;
         // The app document first: the first models installation seeds a missing one from the
@@ -489,7 +493,7 @@ internal sealed partial class ImportRun
         {
             await documents.ReplaceAsync(ConfigDocumentName.Mcp, AdmitMcp(mcp), Token).ConfigureAwait(false);
             // The hosted load rules, as a replica applies them at startup.
-            _ = new McpConfiguration(documents) { StdioAvailable = false }.Snapshot();
+            _ = new McpConfiguration(documents) { StdioAvailable = options.Profile == TenantProfile.Operator }.Snapshot();
             count++;
         }
         if (source.ReadBytes("state/webui.json") is { } webui)
@@ -508,7 +512,7 @@ internal sealed partial class ImportRun
     {
         var document = JsonNode.Parse(ConfigDocumentText.Decode(bytes)) as JsonObject
             ?? throw new InvalidDataException("state/mcp.json isn't a JSON object.");
-        if (document["servers"] is not JsonObject servers)
+        if (options.Profile == TenantProfile.Operator || document["servers"] is not JsonObject servers)
             return bytes;
         var stdio = servers.Where(pair => SessionWait.Text(pair.Value?["transport"]) == "stdio").Select(pair => pair.Key).ToList();
         if (stdio.Count == 0)

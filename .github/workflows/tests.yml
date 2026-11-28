@@ -301,12 +301,14 @@ jobs:
           retention-days: 7
 
   hosted-containers:
+    needs: code-resources
     name: Hosted image, Compose drills, render checks and Helm on kind
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       FOXWARM_HOSTED_IMAGE: foxwarm-hosted:ci
       FOXWARM_HOSTED_NEXT_IMAGE: foxwarm-hosted:ci-next
+      FOXWARM_MASTER_IMAGE: foxwarm-master:ci
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -349,6 +351,18 @@ jobs:
           # Version N+1 of the rolling-update drill: the same build under another tag.
           docker tag "$FOXWARM_HOSTED_IMAGE" "$FOXWARM_HOSTED_NEXT_IMAGE"
           docker image ls "$FOXWARM_HOSTED_IMAGE" --format 'size {{.Size}}'
+      - name: Download the matching Code workbench package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: code-resources
+          path: ${{ runner.temp }}/master-code
+      - name: Build and check the master host image
+        run: |
+          docker build --progress=plain --target master-host --build-context "code=$RUNNER_TEMP/master-code" -t "$FOXWARM_MASTER_IMAGE" .
+          docker run --rm --read-only --entrypoint sh "$FOXWARM_MASTER_IMAGE" -ec '
+            test "$(id -u)" = 1000
+            git --version; python3 --version; chromium --version
+            test -s /app/packages/vscode-web/assets/foxwarm.assets'
       - name: Check the hosted image
         run: |
           set -eu
@@ -368,8 +382,8 @@ jobs:
       - name: Render checks
         run: deploy/hosted/check-render.sh
       - name: Compose drills
-        run: node deploy/hosted/drills/run.mjs --env compose --report "$RUNNER_TEMP/hosted-drills.json"
-      # The chart on Kubernetes: hook order, probes, the shared Agents claim and a takeover.
+        run: node deploy/hosted/drills/run.mjs --env compose --drills smoke,partition,rolling,fence,import,master --report "$RUNNER_TEMP/hosted-drills.json"
+      # The chart on Kubernetes: hook order, probes and a takeover.
       - name: Helm chart on kind
         if: ${{ !cancelled() && steps.image.outcome == 'success' }}
         timeout-minutes: 15

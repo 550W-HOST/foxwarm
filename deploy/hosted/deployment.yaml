@@ -3,8 +3,8 @@
 # tenant settings live in the database and are edited through Setup. A change takes effect when
 # the replicas restart.
 
-# The public address users open (the proxy's published port).
-url: http://localhost:3001
+# Leave the replica URL unset so Node bootstrap uses the validated tenant request origin.
+# The operator service assigns <slug>.localhost in deployment.operator.yaml.
 
 # Reserve the optional operator service's hostname on the tenant listener.
 operator: {url: 'http://operator.localhost:3003', port: 3003}
@@ -17,6 +17,8 @@ bot:
 health:
   # /livez, /readyz and /status; the proxy's health checks use this port.
   port: 3002
+
+mesh: {port: 3004}
 
 blobs:
   backend: s3

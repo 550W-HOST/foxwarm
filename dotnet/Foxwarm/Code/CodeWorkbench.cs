@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
+using Foxwarm.Storage;
 
 namespace Foxwarm.Code;
 
@@ -46,8 +47,8 @@ internal sealed partial class CodeWorkbench
             config?.Paths.ApplicationRoot
             ?? Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
         var resources = config?.Paths.ResourceRoot ?? AppContext.BaseDirectory;
-        appConfig = config is null ? null : Path.GetFullPath(config.AppPath);
-        modelsConfig = config is null ? null : Path.GetFullPath(config.ActivePath);
+        appConfig = config?.Documents.PhysicalPath(ConfigDocumentName.Config);
+        modelsConfig = config?.Documents.PhysicalPath(ConfigDocumentName.Models);
         payloadAssets = new HttpAssets(resources, additionalPack: HttpAssets.CodePack);
         externalAssets = new HttpAssets(applicationRoot, HttpAssets.CodePack);
         extensionRoot = Path.Combine(resources, "packages", "vscode-web");
@@ -78,11 +79,6 @@ internal sealed partial class CodeWorkbench
 
     internal JsonObject Roots()
     {
-        if (appConfig is null || modelsConfig is null)
-            throw new CodeServiceException(
-                "Unavailable",
-                "Active configuration descriptors are unavailable."
-            );
         static JsonObject Descriptor(string path) =>
             new() { ["nodeId"] = "master", ["path"] = CodeNativePaths.Transport(path) };
         return new()
@@ -93,7 +89,7 @@ internal sealed partial class CodeWorkbench
                 ["app"] = Descriptor(applicationRoot),
                 ["data"] = Descriptor(dataRoot),
             },
-            ["configFiles"] = new JsonObject
+            ["configFiles"] = appConfig is null || modelsConfig is null ? null : new JsonObject
             {
                 ["app"] = Descriptor(appConfig),
                 ["models"] = Descriptor(modelsConfig),

@@ -25,3 +25,9 @@ operator:
   enabled: true
   existingSecret: foxwarm-operator-connection
   url: https://control.example.test
+
+masterHost:
+  enabled: true
+  image: registry.example.com/foxwarm-master:hosted-test
+mesh:
+  secretName: foxwarm-mesh
