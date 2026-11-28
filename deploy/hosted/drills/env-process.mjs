@@ -29,7 +29,7 @@ export async function processEnvironment(options = {}) {
   const pgEnv = { ...process.env, LD_LIBRARY_PATH: pgLib, LC_ALL: 'C.UTF-8' }
   const pgPort = await freePort()
   const superPassword = secret(), ownerPassword = secret(), appPassword = secret()
-  const publicPort = await freePort(), healthPort = await freePort()
+  const publicPort = await freePort(), healthPort = await freePort(), meshPort = await freePort()
   const slots = ['r1', 'r2', 'r3']
   const address = slot => `127.0.0.${11 + slots.indexOf(slot)}`
   const replicas = new Map()
@@ -80,6 +80,7 @@ export async function processEnvironment(options = {}) {
       s3Port = await freePort()
       writeFileSync(join(root, 's3-access'), 'drill' + secret().slice(0, 8))
       writeFileSync(join(root, 's3-secret'), secret())
+      writeFileSync(join(root, 'mesh-secret'), randomBytes(32).toString('base64'))
       background('versitygw', versitygw, ['--port', `127.0.0.1:${s3Port}`, 'posix', join(root, 's3')], {
         ...process.env,
         ROOT_ACCESS_KEY_ID: readFileSync(join(root, 's3-access'), 'utf8'),
@@ -105,12 +106,12 @@ export async function processEnvironment(options = {}) {
       return environment.psql(sql).split('\n').filter(line => line.length > 0).map(line => line.split('\t'))
     },
 
-    deployment(slot) {
-      const path = join(root, `deployment-${slot}.yaml`)
+    deployment(slot, master = false) {
+      const path = join(root, `deployment-${master ? 'master' : slot}.yaml`)
       writeFileSync(path, [
-        `url: http://127.0.0.1:${front.port}`,
+        ...(master ? [`mesh: {port: ${meshPort}}`] : [`url: http://127.0.0.1:${front.port}`]),
         'bot:',
-        `  httpHost: ${address(slot)}`,
+        `  httpHost: ${master ? '127.0.0.31' : address(slot)}`,
         `  httpPort: ${publicPort}`,
         'health:',
         `  port: ${healthPort}`,
@@ -227,12 +228,12 @@ export async function processEnvironment(options = {}) {
 
     async startMaster() {
       const host = '127.0.0.31'
-      const deployment = join(root, 'deployment-master.yaml')
-      writeFileSync(deployment, readFileSync(environment.deployment('r1'), 'utf8').replace(address('r1'), host))
+      const deployment = environment.deployment('r1', true)
       mkdirSync(environment.masterAgents, { recursive: true })
       const child = background('master-host', binary, [], {
         ...environment.replicaEnv('r1'), FOXWARM_HOSTED_TOPOLOGY: 'tenants', FOXWARM_ROLE: 'master-host',
-        FOXWARM_REPLICA_ID: 'foxwarm-master', FOXWARM_ADVERTISE_ADDRESS: `${host}:${publicPort}`,
+        FOXWARM_REPLICA_ID: 'foxwarm-master', FOXWARM_ADVERTISE_ADDRESS: `${host}:${meshPort}`,
+        FOXWARM_MESH_SECRET_FILE: join(root, 'mesh-secret'),
         FOXWARM_AGENTS_DIR: environment.masterAgents, FOXWARM_SCRATCH_DIR: join(root, 'master', 'scratch'),
         FOXWARM_DEPLOYMENT_CONFIG: deployment,
       })

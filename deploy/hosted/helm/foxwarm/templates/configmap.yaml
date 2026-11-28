@@ -12,7 +12,9 @@ data:
     {{- toYaml $replica | nindent 4 }}
   {{- if .Values.masterHost.enabled }}
   master.yaml: |
-    {{- include "foxwarm.deploymentConfig" . | nindent 4 }}
+    {{- $master := include "foxwarm.deploymentConfig" . | fromYaml -}}
+    {{- $_ := set $master "mesh" (dict "port" (int .Values.mesh.port)) -}}
+    {{- toYaml $master | nindent 4 }}
   {{- end }}
   {{- if .Values.operator.enabled }}
   operator.yaml: |

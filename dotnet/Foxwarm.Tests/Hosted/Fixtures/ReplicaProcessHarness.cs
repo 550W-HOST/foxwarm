@@ -163,6 +163,8 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
         info.Environment["DOTNET_GCHeapHardLimit"] = "0x30000000";
         foreach (var (key, value) in environment ?? new Dictionary<string, string>())
             info.Environment[key] = value;
+        if (info.Environment.TryGetValue("FOXWARM_ROLE", out var role) && role == "master-host")
+            Directory.CreateDirectory(info.Environment["FOXWARM_AGENTS_DIR"]!);
         var process = Process.Start(info)!;
         var replica = new Replica(name, process, proxy, front, health);
         lock (replicas)

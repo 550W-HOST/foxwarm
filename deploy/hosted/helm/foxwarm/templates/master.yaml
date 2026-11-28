@@ -42,7 +42,7 @@ spec:
             - {name: FOXWARM_AGENTS_DIR, value: /master}
             - {name: FOXWARM_SCRATCH_DIR, value: /master/scratch}
             - {name: FOXWARM_REPLICA_ID, value: "$(POD_NAME)"}
-            - {name: FOXWARM_ADVERTISE_ADDRESS, value: "$(POD_IP):{{ .Values.ports.http }}"}
+            - {name: FOXWARM_ADVERTISE_ADDRESS, value: "$(POD_IP):{{ .Values.mesh.port }}"}
             - {name: FOXWARM_DATABASE_URL_FILE, value: /run/secrets/foxwarm/database-url}
             - {name: FOXWARM_KEK_FILE, value: /run/secrets/foxwarm/kek.json}
             {{- if .Values.secrets.kekPrevious }}

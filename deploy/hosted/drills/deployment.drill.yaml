@@ -10,6 +10,8 @@ health:
   # /livez, /readyz and /status; the proxy's health checks use this port.
   port: 3002
 
+mesh: {port: 3004}
+
 blobs:
   backend: s3
   s3:

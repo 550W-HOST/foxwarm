@@ -3,9 +3,9 @@
 import { request } from 'node:http'
 import { assert, until } from './util.mjs'
 
-function client(base, token) {
-  return (method, path, body) => new Promise((resolve, reject) => {
-    const headers = { host: 'master-ops.test' }
+function client(base, token, authority = 'master-ops.test') {
+  return (method, path, body, extraHeaders = {}) => new Promise((resolve, reject) => {
+    const headers = { ...extraHeaders, host: authority }
     if (token) headers.authorization = 'Bearer ' + token
     if (body) headers['content-type'] = 'application/json'
     const req = request(new URL(path, base), { method, headers, signal: AbortSignal.timeout(20000) }, res => {
@@ -23,7 +23,8 @@ export async function masterHost(env, general) {
   const slug = 'master-ops'
   await env.sql(`INSERT INTO tenants (name,profile,pinned_role) VALUES ('${slug}','operator','master-host');
     INSERT INTO tenant_leases (tenant_id) SELECT tenant_id FROM tenants WHERE name='${slug}';
-    INSERT INTO tenant_hostnames(hostname,tenant_id,kind) SELECT '${slug}.test',tenant_id,'primary' FROM tenants WHERE name='${slug}'`)
+    INSERT INTO tenant_hostnames(hostname,tenant_id,kind) SELECT '${slug}.test',tenant_id,'primary' FROM tenants WHERE name='${slug}';
+    INSERT INTO tenant_hostnames(hostname,tenant_id,kind) SELECT '${slug}.localhost',tenant_id,'custom' FROM tenants WHERE name='${slug}'`)
   const lease = async tenant => (await env.sql(`SELECT l.epoch,l.owner_replica FROM tenant_leases l JOIN tenants t USING(tenant_id) WHERE t.name='${tenant}'`))[0]
   const ordinary = await lease(env.tenant)
   let master = await env.startMaster()
@@ -39,6 +40,15 @@ export async function masterHost(env, general) {
     assert(credential.code === 0, 'read operator sign-in credential: ' + credential.stderr)
     const token = credential.stdout.trim()
     const call = client(master.url, token)
+    // The front validates the hostname; remote Node scripts must preserve its public port
+    // and must not infer a public origin from forwarding headers or the mesh listener.
+    const forwarded = { 'X-Forwarded-Host': 'untrusted.test', 'X-Forwarded-Proto': 'https' }
+    const authority = `${slug}.test:8443`
+    const script = await client(master.url, token, authority)('GET', '/node/run.sh', undefined, forwarded)
+    assert(script.status === 200 && script.text.includes(`HOST="http://${authority}"`) && !script.text.includes('untrusted.test'),
+      'master Node bootstrap uses the validated request origin')
+    const local = await client(master.url, token, `${slug}.localhost`)('GET', '/node/run.sh', undefined, forwarded)
+    assert(local.status === 503, 'a local-only tenant address cannot bootstrap a remote Node')
     const yaml = `default: drill/wire\nproviders:\n  drill:\n    providerType: openai-responses\n    baseUrl: ${env.modelBaseUrl}\n    models: [wire]\n`
     for (const [route, body, status] of [
       ['/api/setup/models', { yaml }, 200],
