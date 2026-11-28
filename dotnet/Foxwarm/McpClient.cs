@@ -335,6 +335,7 @@ internal sealed partial class McpClient : IAsyncDisposable
                         ownerGeneration,
                         async (client, config, requestToken) =>
                         {
+                            var toolType = McpJsonUtilities.DefaultOptions.GetTypeInfo(typeof(Tool));
                             var tools = new List<JsonObject>();
                             string? cursor = null;
                             int pages = 0;
@@ -365,7 +366,7 @@ internal sealed partial class McpClient : IAsyncDisposable
                                 if (page.Tools.Count > 8192 - tools.Count) throw DiscoveryLimit();
                                 foreach (var tool in page.Tools)
                                 {
-                                    var encoded = JsonSerializer.SerializeToUtf8Bytes(tool, McpJsonUtilities.DefaultOptions);
+                                    var encoded = JsonSerializer.SerializeToUtf8Bytes(tool, toolType);
                                     bytes += encoded.Length;
                                     if (bytes > 32 * 1024 * 1024) throw DiscoveryLimit();
                                     tools.Add(JsonNode.Parse(encoded)!.AsObject());
