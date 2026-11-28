@@ -19,16 +19,19 @@ internal sealed partial class AsrProxy : IDisposable
     private readonly HttpClient http;
     private readonly Foxwarm.Net.EgressPolicy egress;
     private readonly CancellationToken stopped;
+    private readonly Channels.WebUi.HostedUploadStaging? staging;
     internal bool Configured => service is not null;
 
     internal AsrProxy(
         ModelConfiguration? configuration,
         CancellationToken stopped,
-        Foxwarm.Net.EgressPolicy egress
+        Foxwarm.Net.EgressPolicy egress,
+        Channels.WebUi.HostedUploadStaging? staging = null
     )
     {
         // The ASR service is a deployment setting, not the tenant's: the operator purpose.
         this.egress = egress;
+        this.staging = staging;
         http = Foxwarm.Net.EgressHttp.Client(
             this.egress,
             Foxwarm.Net.EgressPurpose.Deployment,
@@ -218,6 +221,8 @@ internal sealed partial class AsrProxy : IDisposable
             return Results.BadRequest(
                 new JsonObject { ["error"] = "One multipart audio file is required." }
             );
+        if (staging is not null && !staging.ReserveMultipart(context.Response))
+            return Results.Json(new JsonObject { ["error"] = "Too many uploads are in progress. Try again when one finishes." }, statusCode: 429);
         try
         {
             using var lifetime = Lifetime(context.RequestAborted, TimeSpan.FromMinutes(10));

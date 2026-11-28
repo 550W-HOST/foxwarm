@@ -185,19 +185,50 @@ internal sealed class ImportSource : IDisposable
     /// <paramref name="workRoot"/>'s state directory and checkpoints the copy, so the copy holds
     /// every committed transaction whether or not the stopped Main checkpointed. Returns the
     /// copy's path, or null when the store doesn't exist. Main is stopped and its lock held, so
-    /// the two files are one consistent state.
+    /// the database and its sidecars represent one offline state.
     /// </summary>
     internal string? Snapshot(string file, string workRoot)
     {
-        var source = PathOf("state/" + file);
-        if (!File.Exists(source))
+        var relative = "state/" + file;
+        var source = PathOf(relative);
+        string? Sidecar(string suffix)
+        {
+            // SQLite names the database's sidecars from its resolved name. A separate file
+            // beside the link is not part of that SQLite database.
+            var physical = PathOf(Path.GetRelativePath(Root, source) + suffix);
+            var logical = PathOf(relative + suffix);
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (!string.Equals(physical, logical, comparison) && Present(logical))
+                throw Conflicting();
+            return Present(physical) ? physical : null;
+        }
+        ImportRefusedException Conflicting() => new($"The import source has conflicting SQLite sidecars for {relative}. Keep the sidecars beside the database they belong to.");
+        var wal = Sidecar("-wal");
+        var shm = Sidecar("-shm");
+        var journal = Sidecar("-journal");
+        if (!Present(source))
+        {
+            if (wal is not null || shm is not null || journal is not null) throw Conflicting();
             return null;
+        }
+        if (journal is not null)
+        {
+            using var input = File.OpenRead(journal);
+            // An empty/truncated journal or a zeroed header is how SQLite invalidates
+            // a rollback journal. A nonzero header in a full journal needs recovery.
+            Span<byte> header = stackalloc byte[8];
+            if (input.Length > 512)
+            {
+                input.ReadExactly(header);
+                if (header.ContainsAnyExcept((byte)0))
+                    throw new ImportRefusedException($"The import source has an unfinished SQLite transaction in {relative}. Open the source installation once and stop it cleanly, then import again.");
+            }
+        }
         var target = Path.Combine(workRoot, "state", file);
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.Copy(source, target, overwrite: true);
-        var wal = PathOf("state/" + file + "-wal");
-        if (File.Exists(wal))
-            File.Copy(wal, target + "-wal", overwrite: true);
+        if (wal is not null) File.Copy(wal, target + "-wal", overwrite: true);
+        if (shm is not null) File.Copy(shm, target + "-shm", overwrite: true);
         using (var connection = new SqliteConnection(
             new SqliteConnectionStringBuilder { DataSource = target, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString()
         ))
@@ -208,6 +239,13 @@ internal sealed class ImportSource : IDisposable
             checkpoint.ExecuteNonQuery();
         }
         return target;
+    }
+
+    // File.Exists suppresses I/O and access errors. Only absence makes a store or sidecar optional.
+    private static bool Present(string path)
+    {
+        try { _ = File.GetAttributes(path); return true; }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return false; }
     }
 
     /// <summary>

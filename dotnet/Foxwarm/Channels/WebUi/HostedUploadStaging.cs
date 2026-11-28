@@ -123,15 +123,36 @@ internal sealed class HostedUploadStaging : IDisposable
         }
     }
 
+    internal void CancelWrite(string path, bool created, Action cleanup)
+    {
+        try
+        {
+            cleanup();
+        }
+        finally
+        {
+            if (!created) Forget(path); // CreateNew failed; never delete someone else’s file.
+            else Published(path, null); // Schedules expiry only if cleanup left an entry.
+        }
+    }
+
+    private void Forget(string path)
+    {
+        lock (gate)
+        {
+            if (!files.Remove(Path.GetFullPath(path), out var entry)) return;
+            entry.Removed = true;
+            if (entry.Readers == 0) used -= entry.Charge;
+            entry.Forget?.Invoke(path);
+        }
+    }
+
     internal void Delete(string path)
     {
         lock (gate)
         {
             File.Delete(path);
-            if (!files.Remove(Path.GetFullPath(path), out var entry)) return;
-            entry.Removed = true;
-            if (entry.Readers == 0) used -= entry.Charge;
-            entry.Forget?.Invoke(path);
+            Forget(path);
         }
     }
 

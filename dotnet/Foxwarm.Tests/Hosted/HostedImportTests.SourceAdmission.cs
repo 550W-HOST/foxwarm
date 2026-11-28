@@ -56,6 +56,82 @@ public sealed partial class HostedImportTests
         Assert.True(result.Exit == HostedImport.Imported, result.Report.ToJsonString());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LinkedDatabaseVerifiesTheOnlyCommittedRowFromItsPhysicalWal(bool omitHostedRow)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var root = CopyFixture("offline");
+        var logical = Path.Combine(root, "state", "tasks.sqlite");
+        var physical = Path.Combine(Directory.CreateDirectory(Path.Combine(root, "stores")).FullName, "tasks.db");
+        var original = Path.Combine(temp.Path, "writer.db");
+        File.Move(logical, original);
+        File.CreateSymbolicLink(logical, physical);
+        using (var writer = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = original, Pooling = false }.ToString()))
+        {
+            writer.Open();
+            using var cmd = writer.CreateCommand();
+            cmd.CommandText = "PRAGMA journal_mode=WAL; DELETE FROM task_notes; PRAGMA wal_checkpoint(TRUNCATE)";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "PRAGMA wal_autocheckpoint=0; INSERT INTO task_notes(taskId,text,createdAt) SELECT id,'wal-only',1 FROM tasks LIMIT 1";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "SELECT count(*) FROM task_notes";
+            Assert.Equal(1L, cmd.ExecuteScalar());
+            // Make a stopped copy before closing the writer checkpoints its last connection.
+            foreach (var suffix in new[] { "", "-wal", "-shm" })
+                File.Copy(original + suffix, physical + suffix);
+        }
+        await using var database = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
+        // Simulate a writer that accepts the INSERT but fails to retain the only row.
+        // Without the WAL in the source view, verification would compare zero against zero.
+        if (omitHostedRow)
+            await database.ExecuteOwnerAsync("CREATE FUNCTION omit_note() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END$$; CREATE TRIGGER omit_note BEFORE INSERT ON task_notes FOR EACH ROW EXECUTE FUNCTION omit_note()");
+        var result = await RunAsync(database, root, "linked", Reports);
+        Assert.Equal(omitHostedRow ? HostedImport.Failed : HostedImport.Imported, result.Exit);
+        var notes = result.Report["verification"]!["tables"]!.AsArray().Single(row => row!["table"]!.ToString() == "task_notes")!;
+        Assert.Equal(1L, notes["sourceRows"]!.GetValue<long>());
+        Assert.Equal(omitHostedRow ? 0L : 1L, notes["importedRows"]!.GetValue<long>());
+        Assert.Equal(!omitHostedRow, notes["equal"]!.GetValue<bool>());
+        Assert.Equal(omitHostedRow ? 0L : 1L, await database.ScalarAsync("SELECT count(*) FROM task_notes WHERE text='wal-only'"));
+        Assert.Equal(omitHostedRow ? "importing" : "active", await TenantStateAsync(database, "linked"));
+    }
+
+    [Theory]
+    [InlineData("-shm")]
+    [InlineData("-wal")]
+    public async Task AmbiguousLinkedSidecarsAreRefused(string suffix)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var root = CopyFixture("offline");
+        var logical = Path.Combine(root, "state", "tasks.sqlite");
+        var physical = Path.Combine(root, "original.db");
+        File.Move(logical, physical);
+        File.CreateSymbolicLink(logical, physical);
+        File.WriteAllBytes(logical + suffix, []);
+        await using var database = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
+        var result = await RunAsync(database, root, "ambiguous", Reports);
+        Assert.Equal(HostedImport.Refused, result.Exit);
+        Assert.Contains("conflicting SQLite sidecars", result.Report["refusals"]!.ToJsonString());
+        Assert.Null(await TenantStateAsync(database, "ambiguous"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PendingRollbackJournalRefusesBeforeCopyButAnInvalidatedJournalDoesNot(bool hot)
+    {
+        var root = CopyFixture("offline");
+        var journal = new byte[4096];
+        if (hot) new byte[] { 0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7 }.CopyTo(journal, 0);
+        File.WriteAllBytes(Path.Combine(root, "state", "tasks.sqlite-journal"), journal);
+        await using var database = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
+        var result = await RunAsync(database, root, "rollback", Reports, dryRun: true);
+        Assert.Equal(hot ? HostedImport.Refused : HostedImport.Imported, result.Exit);
+        if (hot) Assert.Contains("unfinished SQLite transaction", result.Report["refusals"]!.ToJsonString());
+        Assert.Null(await TenantStateAsync(database, "rollback"));
+    }
+
     [Fact]
     public async Task DryRunChecksSourceIdentityRangesAcrossStores()
     {
