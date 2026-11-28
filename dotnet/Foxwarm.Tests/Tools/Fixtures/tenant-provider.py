@@ -7,9 +7,10 @@ import time
 root, mode = pathlib.Path(sys.argv[1]), sys.argv[2]
 root.mkdir(parents=True, exist_ok=True)
 request = json.loads(sys.stdin.readline())
-tenant = request.get('tenant')
+tenant = request.get('tenantId')
+assert tenant is None or type(tenant) is int
 operation = request['operation']
-workspace = root / (tenant or 'legacy')
+workspace = root / ('legacy' if tenant is None else str(tenant))
 workspace.mkdir(exist_ok=True)
 
 def record(message):
@@ -26,7 +27,7 @@ def node(name):
 record(request)
 identity = {key: request[key] for key in ('protocol', 'requestId', 'providerId', 'operation')}
 if tenant is not None:
-    identity['tenant'] = 'wrong' if (root / ('mismatch-' + operation)).exists() else tenant
+    identity['tenantId'] = tenant + 1 if (root / ('mismatch-' + operation)).exists() else tenant
 body = request.get('request', {})
 if operation == 'describe':
     if mode == 'broken':
@@ -50,7 +51,7 @@ elif operation == 'connect':
     for line in sys.stdin:
         frame = json.loads(line)
         record(frame)
-        assert 'tenant' not in frame
+        assert 'tenantId' not in frame
         if frame['type'] == 'node_service_request':
             reply = {'type': 'node_service_response', 'requestId': frame['requestId'], 'result': {'owner': tenant}}
             send(reply)
