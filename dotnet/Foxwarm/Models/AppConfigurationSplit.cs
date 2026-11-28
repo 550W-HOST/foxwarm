@@ -53,6 +53,7 @@ internal static class AppConfigurationSplit
         "blobs",
         "journal.retentionDays",
         "health",
+        "mesh",
         "egress",
         "operator",
     ];

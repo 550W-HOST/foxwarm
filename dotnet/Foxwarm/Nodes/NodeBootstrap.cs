@@ -8,7 +8,8 @@ namespace Foxwarm.Nodes;
 internal sealed partial class NodeBootstrap(
     NodeConnectionHub hub,
     PublicWebAddress address,
-    bool hasConfiguredUrl = true
+    bool hasConfiguredUrl = true,
+    bool usePublicTemplateUrl = false
 )
 {
     private static readonly string[] Templates =
@@ -203,6 +204,33 @@ internal sealed partial class NodeBootstrap(
         return protocol + "://" + host;
     }
 
+    private string? TemplateBaseUrl(HttpRequest request)
+    {
+        if (!usePublicTemplateUrl)
+            return InferRequestBaseUrl(request);
+        if (hasConfiguredUrl)
+            return address.BaseUrl.TrimEnd('/');
+
+        // Both tenant listeners preserve the original HTTP Host. The mesh address, bind
+        // address and caller-provided forwarding headers aren't public origins.
+        var authority = request.Host.Value;
+        if (request.Scheme is not ("http" or "https") || string.IsNullOrEmpty(authority)
+            || !System.Text.RegularExpressions.Regex.IsMatch(authority, @"\A[A-Za-z0-9.\-:\[\]]+\z")
+            || !Uri.TryCreate(request.Scheme + "://" + authority, UriKind.Absolute, out var origin)
+            || origin.Port == 0 || origin.IsLoopback)
+            return null;
+        var host = origin.IdnHost.TrimEnd('.');
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (System.Net.IPAddress.TryParse(host, out var ip))
+        {
+            if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+            if (System.Net.IPAddress.IsLoopback(ip) || ip.Equals(System.Net.IPAddress.Any) || ip.Equals(System.Net.IPAddress.IPv6Any))
+                return null;
+        }
+        return origin.GetLeftPart(UriPartial.Authority);
+    }
+
     private static string PowerShellDownload(string url, string name) =>
         "& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Uri "
         + PowerShellQuote(url.TrimEnd('/') + "/node/" + name)
@@ -252,6 +280,13 @@ internal sealed partial class NodeBootstrap(
                         context.Response.StatusCode = 503;
                         return;
                     }
+                    var baseUrl = TemplateBaseUrl(context.Request);
+                    if (baseUrl is null)
+                    {
+                        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                        await context.Response.WriteAsync("A reachable public URL is required to download this Node script. Configure the deployment URL or use the tenant’s public hostname.", context.RequestAborted);
+                        return;
+                    }
                     context.Response.ContentType =
                         name.EndsWith(".yaml") ? "text/yaml"
                         : name == "run-shell.sh" ? "text/x-shellscript; charset=utf-8"
@@ -260,7 +295,7 @@ internal sealed partial class NodeBootstrap(
                     await context.Response.WriteAsync(
                         text.Replace(
                                 "__FOXWARM_DEFAULT_BASE_URL__",
-                                InferRequestBaseUrl(context.Request)
+                                baseUrl
                             )
                             .Replace("__FOXWARM_NATIVE_CLI_URL__", NativeDownloadUrl)
                             .Replace(

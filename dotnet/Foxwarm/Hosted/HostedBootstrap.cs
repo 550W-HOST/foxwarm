@@ -23,7 +23,8 @@ internal sealed record HostedBootstrap(
     string? KekFile = null,
     string? KekPreviousFile = null,
     string OperatorRole = HostedBootstrap.DefaultOperatorRole,
-    string Role = Lease.ReplicaRoles.General
+    string Role = Lease.ReplicaRoles.General,
+    string? MeshSecretFile = null
 )
 {
     internal const string DefaultTenant = "default";
@@ -62,7 +63,8 @@ internal sealed record HostedBootstrap(
             Path(environment, "FOXWARM_KEK_FILE"),
             Path(environment, "FOXWARM_KEK_PREVIOUS_FILE"),
             Name(environment, "FOXWARM_OPERATOR_ROLE", DefaultOperatorRole),
-            ReplicaRole(Read(environment, "FOXWARM_ROLE"))
+            ReplicaRole(Read(environment, "FOXWARM_ROLE")),
+            Path(environment, "FOXWARM_MESH_SECRET_FILE")
         );
     }
 

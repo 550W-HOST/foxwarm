@@ -9,7 +9,8 @@ internal static class NodeRoutes
     internal static void Register(
         WebApplication app,
         SessionManager sessions,
-        PublicWebAddress address
+        PublicWebAddress address,
+        bool usePublicTemplateUrl = false
     )
     {
         var hub = sessions.Nodes;
@@ -37,7 +38,8 @@ internal static class NodeRoutes
         var bootstrap = sessions.Bootstrap = new NodeBootstrap(
             hub,
             address,
-            hasConfiguredUrl: !string.IsNullOrEmpty(configuredBaseUrl)
+            hasConfiguredUrl: !string.IsNullOrEmpty(configuredBaseUrl),
+            usePublicTemplateUrl: usePublicTemplateUrl
         );
         bootstrap.Register(app);
         app.Map("/node_ws", hub.HandleAsync);

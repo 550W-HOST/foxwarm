@@ -28,6 +28,10 @@ public sealed class EgressSourceRulesTests
     // Single constructs a type may use, with why.
     private static readonly Dictionary<(string Type, string Construct), string> Uses = new()
     {
+        [("Foxwarm.Hosted.Forwarding.MeshTransport", "HttpRequestMessage.Version")] =
+            "a replica activation uses HTTP/2 on the deployment mesh",
+        [("Foxwarm.Hosted.Forwarding.MeshTransport", "HttpRequestMessage.VersionPolicy")] =
+            "the mesh listener accepts HTTP/2 only",
         [("Foxwarm.McpOAuthService", "HttpRequestMessage.Version")] =
             "the OAuth retry copies the original request's version",
         [("Foxwarm.McpOAuthService", "HttpRequestMessage.VersionPolicy")] =

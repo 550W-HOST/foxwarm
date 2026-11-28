@@ -477,7 +477,7 @@ internal sealed class HttpServer
             }
         );
         new WebhookHttp(accessConfiguration, new SessionRuntime(sessions)).Register(app, address);
-        Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
+        Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address, usePublicTemplateUrl: sessions.Models.ConfigurationOwner?.Hosted == true);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);
         InboundMcp.Register(app);
         new RuntimeMcpService(sessions.RuntimeCredentials).Register(app);

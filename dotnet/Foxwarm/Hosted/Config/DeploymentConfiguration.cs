@@ -33,6 +33,14 @@ internal sealed record DeploymentConfiguration(
     /// <summary>The health listener on the public listener's address.</summary>
     internal IPEndPoint HealthEndpoint => new(PublicEndpoint.Address, HealthPort);
 
+    internal IPEndPoint RequireMeshEndpoint()
+    {
+        if (Root["mesh"] is not JsonObject mesh || mesh.Any(pair => pair.Key != "port")
+            || SessionWait.Number(mesh["port"]) is not { } port || port != Math.Truncate(port) || port is < 1 or > 65535)
+            throw new HostedBootstrapException("The runtimes host needs mesh: {port: 1..65535}.");
+        return new(PublicEndpoint.Address, (int)port);
+    }
+
     /// <summary>Whether <c>url</c> is a template with <see cref="SlugPlaceholder"/>.</summary>
     internal bool UrlIsTemplate =>
         SessionWait.Text(Root["url"]) is { } url && url.Contains(SlugPlaceholder, StringComparison.Ordinal);

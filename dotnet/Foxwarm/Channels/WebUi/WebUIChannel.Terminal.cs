@@ -157,8 +157,9 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
-        app.MapGet(
+        app.MapMethods(
             "/api/terminals/stream",
+            [HttpMethods.Get, HttpMethods.Connect],
             async (HttpContext context) =>
             {
                 if (!context.WebSockets.IsWebSocketRequest)

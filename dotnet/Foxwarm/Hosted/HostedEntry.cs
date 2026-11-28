@@ -85,6 +85,16 @@ internal static class HostedEntry
         CancellationToken stop
     )
     {
+        Forwarding.MeshSettings mesh;
+        try
+        {
+            mesh = Forwarding.MeshSettings.Load(bootstrap.AdvertiseAddress, deployment.RequireMeshEndpoint(), bootstrap.MeshSecretFile);
+        }
+        catch (HostedBootstrapException error)
+        {
+            Console.Error.WriteLine("Error: " + error.Message);
+            return HostedExit.Configuration;
+        }
         var replica = new Runtimes.TenantReplica(
             new Runtimes.TenantReplicaOptions(
                 bootstrap.ReplicaName ?? Environment.MachineName,
@@ -100,6 +110,7 @@ internal static class HostedEntry
                 Role = bootstrap.Role,
                 MountedOperatorPath = deployment.MountedOperatorPath(),
                 OperatorHostname = deployment.Root.ContainsKey("operator") ? Operator.OperatorListener.ReadSettings(deployment).Host : null,
+                Mesh = mesh,
             },
             database,
             bootstrap.RequireDatabaseUrl(),

@@ -153,14 +153,27 @@ internal sealed class TenantActivations : IAsyncDisposable
         while (true)
         {
             var generation = await ActivateAsync(tenant, cause, token).ConfigureAwait(false);
-            if (generation.Gate.TryEnter() is { } admission)
-                return (generation, admission);
+            if (TryAdmitExact(tenant, generation.Id.Epoch, replica) is { } admitted)
+                return admitted;
             if (!generation.Handle.IsCurrent(clock()))
                 renewer.Lose(generation.Handle, Expired);
             lock (gate)
                 if (slots.TryGetValue(tenant, out var slot) && slot.Releasing is not null)
                     slot.Demand = true;
             await Task.Yield();
+        }
+    }
+
+    /// <summary>Pin an exact dispatch without activating a tenant or following a stale route.</summary>
+    internal (TenantGeneration Generation, AdmissionGate.Admission Admission)? TryAdmitExact(
+        string tenant, long epoch, string receiverBoot)
+    {
+        lock (gate)
+        {
+            if (disposed || receiverBoot != replica || !slots.TryGetValue(tenant, out var slot)
+                || slot.Current is not { } current || current.Id.Epoch != epoch)
+                return null;
+            return current.Gate.TryEnter() is { } admission ? (current, admission) : null;
         }
     }
 

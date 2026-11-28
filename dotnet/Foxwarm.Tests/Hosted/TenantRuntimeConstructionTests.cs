@@ -178,6 +178,23 @@ public sealed class HostedSetupCleanupTests
 
 public sealed class HostnameDirectoryTests
 {
+    [Fact]
+    [Trait("Backend", "postgres")]
+    public async Task RefreshPreloadsHostnamesAndDropsAMappingWhoseNotificationWasMissed()
+    {
+        await using var database = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
+        await database.ExecuteOwnerAsync("INSERT INTO tenant_hostnames (hostname,tenant_id,kind) SELECT 'shop.test',tenant_id,'custom' FROM tenants LIMIT 1");
+        var directory = new HostnameDirectory(database.OpenApp());
+        await directory.RefreshAsync(default);
+        Assert.True(directory.Count > 0);
+        directory.AfterQuery = () => throw new InvalidOperationException("Preloaded route required a query.");
+        Assert.NotNull(await directory.ResolveAsync("shop.test", default));
+        directory.AfterQuery = null;
+        await database.ExecuteOwnerAsync("DELETE FROM tenant_hostnames WHERE hostname='shop.test'");
+        await directory.RefreshAsync(default);
+        Assert.Null(await directory.ResolveAsync("shop.test", default));
+    }
+
     // Review 4b #10: a lookup that began before an invalidation is neither cached nor returned.
     [Fact]
     [Trait("Backend", "postgres")]

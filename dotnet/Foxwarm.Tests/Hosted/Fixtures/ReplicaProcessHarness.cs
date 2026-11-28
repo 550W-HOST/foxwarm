@@ -28,12 +28,15 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
     private readonly TempDirectory temp = new();
     private readonly List<Replica> replicas = [];
     private readonly string kek;
+    private readonly string meshKey;
 
     private ReplicaProcessHarness(HostedTestDatabase database)
     {
         Database = database;
         kek = Path.Combine(temp.Path, "kek", "current.key");
         InstanceKeys.OpenOrCreate(kek);
+        meshKey = Path.Combine(temp.Path, "mesh.key");
+        File.WriteAllText(meshKey, Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)));
     }
 
     internal HostedTestDatabase Database { get; }
@@ -102,28 +105,41 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
             slug
         ))!;
 
+    internal async Task<string> SignInTokenAsync(string slug)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var code = await Foxwarm.Hosted.HostedCli.RunAsync(["hosted", "token", "--tenant", slug], output, error,
+            new System.Collections.Hashtable { ["FOXWARM_DATABASE_URL"] = Database.AppConnectionString, ["FOXWARM_KEK_FILE"] = kek });
+        Assert.True(code == 0, error.ToString());
+        return output.ToString().Trim();
+    }
+
     /// <summary>Starts a replica process named <paramref name="name"/> and waits until it is ready.</summary>
     internal async Task<Replica> StartAsync(string name, IDictionary<string, string>? environment = null, bool webUi = true, string extraConfig = "")
     {
         var root = Path.Combine(temp.Path, name);
         var front = FreePort();
         var health = FreePort();
+        var mesh = FreePort();
         Directory.CreateDirectory(root);
         var deployment = Path.Combine(root, "deployment.yaml");
         await File.WriteAllTextAsync(
             deployment,
-            $"bot: {{httpHost: 127.0.0.1, httpPort: {front}, enableWebUI: {webUi.ToString().ToLowerInvariant()}}}\nhealth: {{port: {health}}}\nblobs: {{backend: postgres}}\n{extraConfig}"
+            $"bot: {{httpHost: 127.0.0.1, httpPort: {front}, enableWebUI: {webUi.ToString().ToLowerInvariant()}}}\nhealth: {{port: {health}}}\nmesh: {{port: {mesh}}}\nblobs: {{backend: postgres}}\n{extraConfig}"
         );
         var proxy = PgTcpProxy.For(Database.AppConnectionString);
         var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
-        var info = new ProcessStartInfo(dotnetRoot is null ? "dotnet" : Path.Combine(dotnetRoot, "dotnet"))
+        var native = Environment.GetEnvironmentVariable("FOXWARM_TEST_MAIN_EXECUTABLE");
+        var info = new ProcessStartInfo(native ?? (dotnetRoot is null ? "dotnet" : Path.Combine(dotnetRoot, "dotnet")))
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             WorkingDirectory = root,
         };
-        info.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Foxwarm.dll"));
+        if (native is null)
+            info.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Foxwarm.dll"));
         // Owned paths only; nothing of a real installation or of the test process's own state.
         foreach (var key in info.Environment.Keys.Where(key => key.StartsWith("FOXWARM_", StringComparison.Ordinal)).ToArray())
             info.Environment.Remove(key);
@@ -136,6 +152,8 @@ internal sealed class ReplicaProcessHarness : IAsyncDisposable
         info.Environment["FOXWARM_SCRATCH_DIR"] = Path.Combine(root, "scratch");
         info.Environment["FOXWARM_AGENTS_DIR"] = Path.Combine(root, "agents");
         info.Environment["FOXWARM_KEK_FILE"] = kek;
+        info.Environment["FOXWARM_ADVERTISE_ADDRESS"] = $"127.0.0.1:{mesh}";
+        info.Environment["FOXWARM_MESH_SECRET_FILE"] = meshKey;
         info.Environment["FOXWARM_DEPLOYMENT_CONFIG"] = deployment;
         info.Environment["HOME"] = Path.Combine(root, "home");
         info.Environment["TMPDIR"] = Path.Combine(root, "tmp");
