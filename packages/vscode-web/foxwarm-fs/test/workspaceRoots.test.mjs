@@ -53,6 +53,7 @@ test('same app/data path has one deterministic combined workspace name', () => {
 });
 
 test('normalizes authoritative master config files and rejects remote or relative descriptors', () => {
+  assert.equal(normalizeConfigFilesResponse({ version: 1, configFiles: null }), null);
   assert.deepEqual(normalizeConfigFilesResponse({
     version: 1,
     configFiles: {

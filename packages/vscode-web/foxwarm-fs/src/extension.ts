@@ -254,7 +254,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('foxwarm-fs.handleOpenRequest', (request: FoxwarmOpenRequest) => handleOpenRequest(request, provider)),
   );
   void provider.getConfigFiles()
-    .then((files) => registerFoxwarmConfigSchemas(files))
+    .then((files) => files && registerFoxwarmConfigSchemas(files))
     .catch((error) => console.warn(`Foxwarm config schema support could not start: ${error instanceof Error ? error.message : String(error)}`));
   console.log('Foxwarm filesystem provider registered for foxwarm://node+<nodeId>/<absolute-path>.');
 }

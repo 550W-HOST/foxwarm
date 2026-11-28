@@ -142,7 +142,7 @@ export class FoxwarmFileSystemProvider implements vscode.FileSystemProvider {
     return normalizeWorkspaceRootsResponse(await this.getWorkspaceMetadata());
   }
 
-  async getConfigFiles(): Promise<Record<FoxwarmConfigFileKind, FoxwarmConfigFile>> {
+  async getConfigFiles(): Promise<Record<FoxwarmConfigFileKind, FoxwarmConfigFile> | null> {
     return normalizeConfigFilesResponse(await this.getWorkspaceMetadata());
   }
 
