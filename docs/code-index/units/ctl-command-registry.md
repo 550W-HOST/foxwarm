@@ -21,7 +21,7 @@ Files: `dotnet/Foxwarm/Tools/Ctl/CtlCommands.json`, `dotnet/Foxwarm/Tools/Ctl/Ct
 Coordinator decisions:
 
 - `task` keeps its native declaration; the registry has no `task` noun (proposed in implementation, accepted by the coordinator).
-- Persisted policy rules naming `search_tools` (or the never-valid `call_tool`, or `ctl`) still load, match nothing and are reported once as a load warning; they never make a policy unavailable. Discovery is filtered by target policy instead.
+- Persisted policy rules naming `search_tools` (or the never-valid `call_tool`, or `ctl`) still load, match nothing and are reported once by the runtime that owns the policy; they never make a policy unavailable. Discovery is filtered by target policy instead.
 - Newly generated isolation-migration layers no longer list `search_tools`. A stored generated layer that differs from the current generation only by that name is still current and is kept as stored (`IsolationMigrationRules.CurrentDigest`); the name matches nothing there.
 - Model-facing hints in tool output name the `ctl` command, built from the registry (see Command hints).
 

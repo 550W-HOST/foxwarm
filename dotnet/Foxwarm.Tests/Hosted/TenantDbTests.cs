@@ -125,6 +125,42 @@ public sealed class TenantDbTests
         Assert.Equal("alpha", alphaDb.Read(tx => tx.Scalar($"SELECT value FROM {Table}")));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SingleConnectionIsReboundAfterAnAbortedWrite(bool cancel)
+    {
+        var (database, alpha) = await PrepareAsync();
+        await using var cleanup = database;
+        await database.ExecuteOwnerAsync("INSERT INTO tenants(name) VALUES('beta'); INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM tenants WHERE name='beta'");
+        var beta = await database.TenantIdAsync("beta");
+        await using var pool = new PgDatabase(database.AppConnectionString, "reuse", maxPoolSize: 1);
+        var first = new TenantDb(pool, alpha, await database.TakeLeaseAsync(alpha));
+        var second = new TenantDb(pool, beta, await database.TakeLeaseAsync(beta));
+        first.Write(tx => Insert(tx, "committed", "alpha"));
+        var backend = 0;
+        using var stop = new CancellationTokenSource();
+        var write = first.WriteAsync<int>(async (tx, ct) =>
+        {
+            backend = (int)tx.Scalar("SELECT pg_backend_pid()")!;
+            await tx.ExecuteAsync($"INSERT INTO {Table}(key) VALUES ('aborted')", ct);
+            if (cancel)
+            {
+                stop.Cancel();
+                ct.ThrowIfCancellationRequested();
+            }
+            throw new InvalidOperationException("rollback");
+        }, token: stop.Token);
+        if (cancel) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => write);
+        else await Assert.ThrowsAsync<InvalidOperationException>(() => write);
+        Assert.Equal(backend, second.Read(tx => (int)tx.Scalar("SELECT pg_backend_pid()")!));
+        Assert.Equal(0, Count(second));
+        second.Write(tx => Insert(tx, "committed", "beta"));
+        Assert.Equal(1, Count(first));
+        Assert.Equal("alpha", first.Read(tx => tx.Scalar($"SELECT value FROM {Table}")));
+        Assert.Equal("beta", second.Read(tx => tx.Scalar($"SELECT value FROM {Table}")));
+    }
+
     [Fact]
     public async Task ATakeoverWaitsForInFlightWritersWhileRenewalDoesNot()
     {

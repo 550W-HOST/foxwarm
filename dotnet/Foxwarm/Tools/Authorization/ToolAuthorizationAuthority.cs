@@ -136,6 +136,8 @@ internal sealed class ToolApprovalOutcomeException(
 
 internal sealed class ToolAuthorizationAuthority
 {
+    private readonly PolicyLoadWarnings loadWarnings = new();
+
     private readonly IConfigDocumentStore documents;
     private readonly Func<long>? clock;
     private readonly Func<CancellationToken, Task>? retryDelay;
@@ -342,7 +344,7 @@ internal sealed class ToolAuthorizationAuthority
         )
             return ToolAuthorizationPolicy.Compatibility();
         var policy = ToolAuthorizationYaml.Parse(bytes);
-        ToolAuthorizationPolicy.Report("policy", policy);
+        loadWarnings.Report("policy", policy);
         return policy;
     }
 

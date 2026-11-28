@@ -90,6 +90,8 @@ internal sealed partial class AgentCatalog
         return chain.ToArray();
     }
 
+    private readonly PolicyLoadWarnings loadWarnings = new();
+
     internal ToolAuthorizationPolicy[] RuleLayers(string name) =>
         NamedRuleLayers(name).Select(layer => layer.Policy).ToArray();
 
@@ -106,7 +108,7 @@ internal sealed partial class AgentCatalog
                             ? row["rules"]
                             : new JsonArray()
                     );
-                    ToolAuthorizationPolicy.Report("rules of Agent " + agent, policy);
+                    loadWarnings.Report("rules of Agent " + agent, policy);
                     return (agent, policy);
                 })
                 .ToArray();

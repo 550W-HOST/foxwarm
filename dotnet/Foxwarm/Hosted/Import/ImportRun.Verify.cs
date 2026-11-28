@@ -166,7 +166,7 @@ internal sealed partial class ImportRun
                 if (snapshot is null)
                 {
                     absent++;
-                    if (File.Exists(Path.Combine(source.State, "sessions", id + ".json")))
+                    if (File.Exists(source.PathOf(Path.Combine("state", "sessions", id + ".json"))))
                     {
                         report.Fail($"Catalog member {id} doesn't load after import.");
                         failures.Add(JsonValue.Create(id));
@@ -206,7 +206,7 @@ internal sealed partial class ImportRun
         var root = Path.Combine(work, "load-check", Guid.NewGuid().ToString("N"));
         var target = Path.Combine(root, "state", "sessions", id + ".json");
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.Copy(Path.Combine(source.State, "sessions", id + ".json"), target);
+        File.Copy(source.PathOf(Path.Combine("state", "sessions", id + ".json")), target);
         var file = new FileSessionAuthorityBackend(root).Open(
             id,
             agent,
@@ -219,7 +219,7 @@ internal sealed partial class ImportRun
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
-            return error.Message.Replace(target, Path.Combine(source.State, "sessions", id + ".json"));
+            return error.Message.Replace(target, source.PathOf(Path.Combine("state", "sessions", id + ".json")));
         }
         finally
         {
@@ -322,7 +322,6 @@ internal sealed partial class ImportRun
     {
         var documents = new JsonArray();
         long count = 0;
-        var file = new FileStateDocuments(source.Root);
         foreach (var name in new[]
         {
             StateDocumentName.Agents, StateDocumentName.Installation, StateDocumentName.Timers,
@@ -330,7 +329,7 @@ internal sealed partial class ImportRun
             StateDocumentName.Nodes, StateDocumentName.Channels, StateDocumentName.ChannelCursors,
         })
         {
-            if (file.Open(name).ReadText() is not { } expected)
+            if (source.ReadDocument(name) is not { } expected)
                 continue;
             var actual = Hosted.Documents.Open(name).ReadText();
             var equal = actual == expected;
@@ -376,14 +375,13 @@ internal sealed partial class ImportRun
 
     private async Task<long> VerifyToolScriptRunsAsync()
     {
-        var file = new Foxwarm.ToolScript.ToolScriptRunStore(source.Root);
         long count = 0;
         foreach (var id in ToolScriptRunIds())
         {
             JsonObject? expected;
             try
             {
-                expected = await file.ReadAsync(id, Token).ConfigureAwait(false);
+                expected = await source.ReadRunAsync(id, Token).ConfigureAwait(false);
             }
             catch (Exception error) when (error is System.Text.Json.JsonException or InvalidDataException or ArgumentException)
             {
@@ -411,10 +409,14 @@ internal sealed partial class ImportRun
         }
         var sourceRing = new FixedKeyRing(sourceKeys!);
         // The redaction cache is checked on its own below; these read only the secret store.
+        var secretRoot = Path.Combine(work, "secret-check");
+        var documents = new FileStateDocuments(secretRoot);
+        if (source.ReadDocument(StateDocumentName.Secrets) is { } secretText)
+            documents.Open(StateDocumentName.Secrets).ReplaceText(secretText, Token);
         using var file = new InstanceSecrets(
-            source.Root,
+            secretRoot,
             keyRing: sourceRing,
-            documents: new FileStateDocuments(source.Root),
+            documents: documents,
             openTextRedaction: _ => null
         );
         using var hosted = new InstanceSecrets(
@@ -488,15 +490,13 @@ internal sealed partial class ImportRun
         if (images.Count + artifacts.Count == 0)
             return 0;
         var (imageStore, artifactStore) = (Hosted.ImageBlobs, Hosted.ArtifactBlobs);
-        var sourceImages = new Foxwarm.Images.ImageBlobFiles(source.Root);
-        var sourceArtifacts = new Foxwarm.Artifacts.ArtifactBlobFiles(Path.Combine(source.State, "artifacts"));
         long same = 0;
         using var all = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var (keys, from, to) in new[] { (images, (IBlobStore)sourceImages, imageStore), (artifacts, sourceArtifacts, artifactStore) })
+        foreach (var (keys, isImage, to) in new[] { (images, true, imageStore), (artifacts, false, artifactStore) })
             foreach (var key in keys)
             {
                 Token.ThrowIfCancellationRequested();
-                var expected = SHA256.HashData(await from.ReadAllAsync(key, Token).ConfigureAwait(false));
+                var expected = SHA256.HashData(await ReadSourceBlobAsync(key, isImage).ConfigureAwait(false));
                 byte[]? actual = null;
                 try
                 {

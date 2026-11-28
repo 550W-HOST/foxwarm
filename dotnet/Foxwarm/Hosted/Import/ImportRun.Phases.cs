@@ -45,6 +45,26 @@ internal sealed partial class ImportRun
 
     private Microsoft.Data.Sqlite.SqliteConnection? Copy(string file) => copies.GetValueOrDefault(file);
 
+    private void CheckSourceIdentityRanges()
+    {
+        void Check(string file, ImportTable table)
+        {
+            if (Copy(file) is not { } connection || !ImportTables.SourceHas(connection, table.Source)) return;
+            var id = table.Identity!;
+            var sourceColumn = ImportTables.Quote(table.Mapped?.GetValueOrDefault(id) ?? id);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = $"SELECT min({sourceColumn}), max({sourceColumn}) FROM {table.Source}";
+            using var range = cmd.ExecuteReader();
+            if (range.Read() && !range.IsDBNull(0) && (range.GetInt64(0) < 0 || range.GetInt64(1) > long.MaxValue / 2))
+                report.Refuse($"The IDs in {table.Target}.{id} are outside the range that can be imported. Renumber them before importing.");
+        }
+        Check("archive-store.sqlite", DirectEffects);
+        Check("tasks.sqlite", TaskNotes);
+        if (options.Journal)
+            foreach (var table in new[] { JournalRequests, JournalStarts, JournalResults })
+                Check("llm-request-journal.sqlite", table);
+    }
+
     private AgentFolderImport? agentFolders;
     private PhysicalAgentImport? physicalFolders;
 
@@ -86,6 +106,11 @@ internal sealed partial class ImportRun
         NotImportedInventory(frontier, other);
         return plan;
     }
+
+    // Leftovers are inventoried, not imported. Never descend through a link in such a tree
+    // (it may also be the operator's separately imported physical Agent tree).
+    private static int CountInventoryFiles(string directory) => new DirectoryInfo(directory).LinkTarget is not null ? 0 :
+        Directory.EnumerateFiles(directory, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false }).Count();
 
     // Source data with no hosted owner in P1, each with a line in the report.
     private void NotImportedInventory(int frontier, int other)
@@ -141,7 +166,7 @@ internal sealed partial class ImportRun
             ("runtime-runs", "Claude Code runtime state; hosted P1 has no Claude runtime."),
         })
             if (Directory.Exists(Path.Combine(state, directory)))
-                report.NotImported("state/" + directory, Directory.EnumerateFiles(Path.Combine(state, directory), "*", SearchOption.AllDirectories).Count(), reason);
+                report.NotImported("state/" + directory, CountInventoryFiles(Path.Combine(state, directory)), reason);
         var known = new HashSet<string>(StringComparer.Ordinal)
         {
             "agents.json", "installation.json", "timers.json", "channels.json", "nodes.json", "mcp-oauth.json",
@@ -177,7 +202,7 @@ internal sealed partial class ImportRun
                 or "sessions-blob" or "session-workers" or "vscode-web" or ".temp" or "migration-backup" or "logs"
                 or "provider-image-cache" or "agents" or "claude-runtime" or "runtime-runs")
                 continue;
-            report.NotImported("state/" + name, Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Count(), "No hosted owner.");
+            report.NotImported("state/" + name, CountInventoryFiles(path), "No hosted owner.");
         }
         if (source.ReadJson("state/migrationVersion.json") is not null)
             report.NotImported("file-mode migration markers (state/migrationVersion.json)", 1, "Hosted schema versions are tracked by `foxwarm db migrate`.");
@@ -250,7 +275,7 @@ internal sealed partial class ImportRun
 
     private long CopyDocument(StateDocumentName name, string file)
     {
-        if (new FileStateDocuments(source.Root).Open(name).ReadText() is not { } text)
+        if (source.ReadText(file) is not { } text)
             return 0;
         Hosted.Documents.Open(name).ReplaceText(text, Token);
         return 1;
@@ -361,15 +386,13 @@ internal sealed partial class ImportRun
 
     private List<string> ToolScriptRunIds()
     {
-        var directory = Path.Combine(source.State, "toolscript-runs");
-        return Directory.Exists(directory)
-            ? Directory.EnumerateFiles(directory, "*.json").Select(path => Path.GetFileNameWithoutExtension(path)!).Order(StringComparer.Ordinal).ToList()
-            : [];
+        return source.Files("state/toolscript-runs", recurse: false)
+            .Where(entry => entry.EndsWith(".json", StringComparison.Ordinal))
+            .Select(entry => Path.GetFileNameWithoutExtension(entry)!).Order(StringComparer.Ordinal).ToList();
     }
 
     private async Task<long> ImportToolScriptRunsAsync()
     {
-        var file = new Foxwarm.ToolScript.ToolScriptRunStore(source.Root);
         long count = 0;
         foreach (var id in ToolScriptRunIds())
         {
@@ -377,7 +400,7 @@ internal sealed partial class ImportRun
             JsonObject? record;
             try
             {
-                record = await file.ReadAsync(id, Token).ConfigureAwait(false);
+                record = await source.ReadRunAsync(id, Token).ConfigureAwait(false);
             }
             catch (Exception error) when (error is System.Text.Json.JsonException or InvalidDataException or ArgumentException)
             {
@@ -436,10 +459,9 @@ internal sealed partial class ImportRun
     private long ImportNodes()
     {
         var count = CopyDocument(StateDocumentName.Nodes, "state/nodes.json");
-        var file = new FileInstanceCredentials(source.Root);
         foreach (var name in Enum.GetValues<InstanceCredentialName>())
         {
-            if (file.Read(name) is not { } value)
+            if (source.ReadCredential(name) is not { } value)
             {
                 report.Warn($"The source has no {PgInstanceCredentials.Key(name)}; hosted mode creates a new one at the first start.");
                 continue;
@@ -531,11 +553,7 @@ internal sealed partial class ImportRun
 
     private List<string> ImageBlobKeys()
     {
-        var root = Path.Combine(source.State, "image-blobs");
-        if (!Directory.Exists(root))
-            return [];
-        return Directory
-            .EnumerateFiles(root, "*", SearchOption.AllDirectories)
+        return source.Files("state/image-blobs")
             .Where(path => !path.EndsWith(".tmp", StringComparison.Ordinal))
             .Select(path => (Directory: Path.GetFileName(Path.GetDirectoryName(path))!, Name: Path.GetFileName(path)))
             .Where(item => item.Name.Length > 2 && item.Name[..2] == item.Directory)
@@ -546,16 +564,16 @@ internal sealed partial class ImportRun
 
     private List<string> ArtifactKeys()
     {
-        var root = Path.Combine(source.State, "artifacts");
-        if (!Directory.Exists(root))
-            return [];
-        return Directory
-            .EnumerateFiles(root, "*", SearchOption.AllDirectories)
+        const string root = "state/artifacts";
+        return source.Files(root)
             .Where(path => !path.EndsWith(".tmp", StringComparison.Ordinal))
             .Select(path => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/'))
             .Order(StringComparer.Ordinal)
             .ToList();
     }
+
+    private Task<byte[]> ReadSourceBlobAsync(string key, bool image) => File.ReadAllBytesAsync(
+        source.PathOf(image ? Path.Combine("state/image-blobs", key[..2], key) : Path.Combine("state/artifacts", key)), Token);
 
     private async Task<long> ImportBlobsAsync()
     {
@@ -564,14 +582,12 @@ internal sealed partial class ImportRun
         if (images.Count + artifacts.Count == 0)
             return 0;
         var (imageStore, artifactStore) = (Hosted.ImageBlobs, Hosted.ArtifactBlobs);
-        var sourceImages = new Foxwarm.Images.ImageBlobFiles(source.Root);
-        var sourceArtifacts = new Foxwarm.Artifacts.ArtifactBlobFiles(Path.Combine(source.State, "artifacts"));
         long count = 0;
-        foreach (var (keys, from, to) in new[] { (images, (IBlobStore)sourceImages, imageStore), (artifacts, sourceArtifacts, artifactStore) })
+        foreach (var (keys, isImage, to) in new[] { (images, true, imageStore), (artifacts, false, artifactStore) })
             foreach (var key in keys)
             {
                 Token.ThrowIfCancellationRequested();
-                var content = await from.ReadAllAsync(key, Token).ConfigureAwait(false);
+                var content = await ReadSourceBlobAsync(key, isImage).ConfigureAwait(false);
                 // An object left by an earlier failed import of the same tenant is kept; the
                 // hash check below then decides.
                 await to.CreateAsync(key, content, keepExisting: true, Token).ConfigureAwait(false);

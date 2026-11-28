@@ -36,23 +36,6 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
     [ThreadStatic]
     private static List<string>? warnings;
 
-    private static readonly HashSet<string> reported = new(StringComparer.Ordinal);
-
-    // Logs each distinct warning of a loaded policy once per process.
-    internal static void Report(string scope, ToolAuthorizationPolicy policy)
-    {
-        foreach (var warning in policy.Warnings)
-        {
-            var line = $"Tool authorization {scope}: {warning}";
-            lock (reported)
-            {
-                if (reported.Count >= 1024 || !reported.Add(line))
-                    continue;
-            }
-            MainLog.Diagnostic(line);
-        }
-    }
-
     internal static ToolAuthorizationPolicy Compatibility() =>
         Normalize(new JsonObject { ["version"] = 1 });
 
@@ -816,5 +799,25 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                 ["rules"] = rules,
             }
         );
+    }
+}
+
+internal sealed class PolicyLoadWarnings
+{
+    private readonly HashSet<string> reported = new(StringComparer.Ordinal);
+
+    // Logs each distinct warning of a loaded policy once for this policy owner.
+    internal void Report(string scope, ToolAuthorizationPolicy policy)
+    {
+        foreach (var warning in policy.Warnings)
+        {
+            var line = $"Tool authorization {scope}: {warning}";
+            lock (reported)
+            {
+                if (reported.Count >= 1024 || !reported.Add(line))
+                    continue;
+            }
+            MainLog.Diagnostic(line);
+        }
     }
 }
