@@ -323,6 +323,10 @@ internal sealed class MainHost : IAsyncDisposable
     {
         log?.UseFor();
         var stopping = System.Diagnostics.Stopwatch.StartNew();
+        // The generation gate has closed. Give already admitted polls a bounded chance to
+        // commit both input and cursor before closing the Session mutation fence.
+        if (sessions.ScheduledProducers is not null && sessions.ManagedChannels is { } polling)
+            await polling.SettleHostedPollersAsync();
         sessions.BeginShutdown();
         if (sessions.ManagedChannels is { } channels)
             await channels.StopIngressAsync();

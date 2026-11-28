@@ -32,6 +32,8 @@ internal sealed class ManagedChannels(
 
     internal Task DrainPollsAsync() => cursors.DrainedAsync();
 
+    internal Task<bool> SettleHostedPollersAsync() => cursors.SettleHostedAsync();
+
     private readonly object weixinGate = new();
     private WeixinApi? weixin;
 
