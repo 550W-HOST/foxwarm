@@ -108,10 +108,12 @@ export async function processEnvironment(options = {}) {
         POLICY_FILE: join(here,'../operator-s3-policy.json'), S3_ENDPOINT: `http://127.0.0.1:${s3Port}` })
       const operatorPort = await freePort()
       const operatorConfig = join(root,'deployment-operator.yaml')
+      const operatorHost = '127.0.0.32'
       const base = readFileSync(environment.deployment('r1'),'utf8')
+        .replace(`httpHost: ${address('r1')}`,`httpHost: ${operatorHost}`)
         .replace(join(root,'s3-access'),join(operatorSecrets,'operator-s3-access-key-id'))
         .replace(join(root,'s3-secret'),join(operatorSecrets,'operator-s3-secret-access-key'))
-      writeFileSync(operatorConfig, base + `url: 'http://{slug}.test'\noperator: {url: 'http://127.0.0.1:${operatorPort}', port: ${operatorPort}}\n`)
+      writeFileSync(operatorConfig, base + `url: 'http://{slug}.test'\noperator: {url: 'http://${operatorHost}:${operatorPort}', port: ${operatorPort}}\n`)
       const operatorEnvironment = environment.replicaEnv('r1')
       delete operatorEnvironment.FOXWARM_MIGRATE_DATABASE_URL
       const operator = background('operator',binary,['operator','serve'], {...operatorEnvironment,
@@ -119,7 +121,7 @@ export async function processEnvironment(options = {}) {
         FOXWARM_DEPLOYMENT_CONFIG: operatorConfig, FOXWARM_ROLE: 'operator' })
       await until(async () => {
         if (operator.exitCode !== null) throw new Error(`Operator exited ${operator.exitCode}`)
-        return (await fetch(`http://127.0.0.1:${operatorPort}/operator/v1/tenants`)).status === 401
+        return (await fetch(`http://${operatorHost}:${operatorPort}/operator/v1/tenants`)).status === 401
       }, 'the operator serves with its scoped credentials',10000)
       return migrate
     },

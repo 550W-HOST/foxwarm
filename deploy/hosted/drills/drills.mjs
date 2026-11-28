@@ -317,8 +317,19 @@ export async function partition(env, context) {
   const after = await lease(env)
   assert(after.acquiredAt >= before.expiresAt - 50, 'the standby took over only after the expiry')
   log(`partition: ${next.replica} took over at epoch ${after.epoch}, ${after.acquiredAt - retiredAt} ms after the old generation retired`)
+  // The generation disappears from /status when fenced. Even after that observation the
+  // process may exit 75 if its cleanup reaches the supervisor deadline. Takeover happened
+  // after expiry, so the old hard stop has passed; re-check the actual child before healing.
+  if (!exited && !await env.status(owner.slot)) {
+    const result = await env.waitExit(owner.slot, 5000)
+    assert(result.code === 75, 'the partitioned boot escalated with the fenced exit code')
+    exited = true
+  }
   await env.heal(owner.slot)
-  if (exited) await env.start(owner.slot)
+  if (exited) {
+    await env.start(owner.slot)
+    await until(async () => (await env.status(owner.slot))?.ready, 'the restarted boot is ready')
+  }
   const { state } = await checkRestartRecovery(env, api, id, 'partition')
   assert(!JSON.stringify(state).includes(stale), "the fenced owner's answer isn't in the Session")
   // bytea columns (Session segments, Archive bodies) dump as hex, text columns as text.
