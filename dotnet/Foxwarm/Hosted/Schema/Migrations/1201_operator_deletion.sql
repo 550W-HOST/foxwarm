@@ -1,12 +1,24 @@
 -- reader-floor: 1201
 -- The deleting row stays the durable job. A SQL sweep finishes before S3 settling; the
--- key, terminal state and lease survive until physical erasure is confirmed.
+-- key, terminal state and lease survive until SQL is clear and, for S3, a settled listing was empty.
 CREATE TABLE operator_deletions (
     tenant_id integer PRIMARY KEY REFERENCES tenants(tenant_id) ON DELETE CASCADE,
     deletion_epoch bigint NOT NULL,
     sql_done boolean NOT NULL DEFAULT false,
     objects_pending boolean NOT NULL,
     settle_after timestamptz
+);
+
+-- No tenant FK: the namespace may receive an already-dispatched write after tenant removal.
+CREATE TABLE operator_object_receipts (
+    tenant_id integer PRIMARY KEY,
+    slug text COLLATE "C" NOT NULL,
+    object_identity text COLLATE "C" NOT NULL,
+    endpoint text COLLATE "C" NOT NULL,
+    bucket text COLLATE "C" NOT NULL,
+    observed_empty_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    recheck_after timestamptz NOT NULL,
+    found_late_objects boolean NOT NULL DEFAULT false
 );
 
 -- Both callers own the row lock and an ownerless epoch. Open only inside their transaction
@@ -47,9 +59,7 @@ DECLARE installation name; relation name; removed integer;
 BEGIN
     PERFORM 1 FROM tenant_leases l JOIN tenants t USING(tenant_id) WHERE l.tenant_id=requested_tenant AND t.state='deleting'
         AND l.epoch=expected AND l.deletion_epoch=expected
-        AND (target<>'tenant_keys' OR EXISTS (
-            SELECT 1 FROM operator_deletions d WHERE d.tenant_id=requested_tenant
-                AND d.deletion_epoch=expected AND d.sql_done AND NOT d.objects_pending))
+        AND target<>'tenant_keys'
         FOR UPDATE OF l;
     IF NOT FOUND THEN RAISE EXCEPTION 'tenant deletion epoch is no longer current' USING ERRCODE='FW001'; END IF;
     SELECT d INTO relation FROM foxwarm_deletion_tables() d WHERE d::text=target;
@@ -87,12 +97,19 @@ BEGIN
     IF NOT FOUND THEN RETURN false; END IF;
     PERFORM set_config('foxwarm.tenant',requested_tenant::text,true);
     SELECT nspname INTO installation FROM pg_catalog.pg_namespace WHERE oid=(SELECT pronamespace FROM pg_catalog.pg_proc WHERE oid='foxwarm_deletion_tables'::regproc);
-    FOR relation IN SELECT * FROM foxwarm_deletion_tables() LOOP
+    remaining := false;
+    FOR relation IN SELECT d FROM foxwarm_deletion_tables() d WHERE d<>'tenant_keys' LOOP
         EXECUTE format('SELECT EXISTS(SELECT 1 FROM %I.%I WHERE tenant_id=$1)',installation,relation) INTO remaining USING requested_tenant;
-        IF remaining THEN RETURN false; END IF;
+        EXIT WHEN remaining;
     END LOOP;
-    IF EXISTS (SELECT 1 FROM tenant_hostnames WHERE tenant_id=requested_tenant) OR EXISTS (SELECT 1 FROM tenant_wakeups WHERE tenant_id=requested_tenant)
-       OR EXISTS (SELECT 1 FROM provider_grants WHERE tenant_id=requested_tenant) OR EXISTS (SELECT 1 FROM operator_documents WHERE tenant_id=requested_tenant) THEN RETURN false; END IF;
+    IF remaining OR EXISTS (SELECT 1 FROM tenant_hostnames WHERE tenant_id=requested_tenant) OR EXISTS (SELECT 1 FROM tenant_wakeups WHERE tenant_id=requested_tenant)
+       OR EXISTS (SELECT 1 FROM provider_grants WHERE tenant_id=requested_tenant) OR EXISTS (SELECT 1 FROM operator_documents WHERE tenant_id=requested_tenant) THEN
+        UPDATE operator_deletions SET sql_done=false WHERE tenant_id=requested_tenant AND deletion_epoch=expected;
+        RETURN false;
+    END IF;
+    PERFORM foxwarm_maintenance_lease(requested_tenant,expected,true);
+    DELETE FROM tenant_keys WHERE tenant_id=requested_tenant;
+    PERFORM foxwarm_maintenance_lease(requested_tenant,expected,false);
     DELETE FROM tenant_leases WHERE tenant_id=requested_tenant;
     DELETE FROM tenants WHERE tenant_id=requested_tenant;
     RETURN true;
@@ -108,6 +125,7 @@ BEGIN
         'session_catalog_after_insert','session_catalog_after_update','session_catalog_after_delete','session_catalog_refresh_subtree'] LOOP
         EXECUTE format('ALTER FUNCTION %I SET search_path TO pg_catalog,%I,pg_temp',fn,current_schema());
     END LOOP;
+    EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON operator_object_receipts TO %I',current_setting('foxwarm.operator_role'));
     EXECUTE format('GRANT SELECT,INSERT,UPDATE ON operator_deletions TO %I',current_setting('foxwarm.operator_role'));
     EXECUTE format('GRANT EXECUTE ON FUNCTION foxwarm_deletion_tables(),foxwarm_operator_delete_chunk(integer,bigint,text,integer),foxwarm_operator_finish_delete(integer,bigint) TO %I',current_setting('foxwarm.operator_role'));
 END $$;

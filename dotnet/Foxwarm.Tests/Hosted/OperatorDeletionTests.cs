@@ -43,6 +43,123 @@ public sealed class OperatorDeletionTests
         }
     }
 
+    [Fact]
+    public async Task Lifecycle_requires_1201_and_a_replacement_operator_enforces_a_committed_suspend()
+    {
+        await using var f = await Fixture.Create();
+        var store = f.Store;
+        await store.CreateAsync("offline", "hosted", "offline.test", default);
+        await store.SuspendAsync("offline", default);
+        var id = await f.Db.TenantIdAsync();
+        var epoch = await f.Db.TakeLeaseAsync(id, "old");
+        await f.Db.ExecuteOwnerAsync(
+            "UPDATE replicas SET binary_level=1200,heartbeat_at=now()-interval '2 hours' WHERE replica_id='old'"
+        );
+        Assert.Equal(
+            409,
+            (
+                await Assert.ThrowsAsync<OperatorProblem>(() =>
+                    store.SuspendAsync(PostgresServer.Tenant, default)
+                )
+            ).Status
+        );
+        Assert.Equal(
+            409,
+            (
+                await Assert.ThrowsAsync<OperatorProblem>(() =>
+                    store.DeleteAsync("offline", default)
+                )
+            ).Status
+        );
+        Assert.Equal(
+            "active",
+            await f.Db.ScalarAsync("SELECT state FROM tenants WHERE tenant_id=$1", id)
+        );
+        await f.Db.ExecuteOwnerAsync(
+            "UPDATE replicas SET binary_level=1201 WHERE replica_id='old'"
+        );
+        using var request = new CancellationTokenSource();
+        var suspended = store.SuspendAsync(PostgresServer.Tenant, request.Token);
+        await Until(async () =>
+            await f.Db.ScalarAsync("SELECT state FROM tenants WHERE tenant_id=$1", id)
+                is "suspended"
+        );
+        request.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => suspended);
+        await f.Db.ExecuteOwnerAsync(
+            "UPDATE tenant_leases SET draining_since=now()-interval '10 seconds' WHERE owner_replica='old'"
+        );
+        using var done = new CancellationTokenSource();
+        var recovery = f.Store.RunDeletionLoopAsync(done.Token);
+        try
+        {
+            await Until(async () =>
+                await f.Db.ScalarAsync(
+                    "SELECT epoch FROM tenant_leases WHERE tenant_id=$1 AND state='released'",
+                    id
+                )
+                    is long final
+                && final == epoch + 1
+            );
+        }
+        finally
+        {
+            done.Cancel();
+            await recovery;
+        }
+    }
+
+    [Fact]
+    public async Task Finalization_keeps_the_key_and_requeues_a_late_dependency()
+    {
+        await using var f = await Fixture.Create();
+        var store = f.Store;
+        await store.CreateAsync("keyed", "hosted", "keyed.test", default);
+        var id = await f.Db.TenantIdAsync("keyed");
+        await store.SuspendAsync("keyed", default);
+        await store.DeleteAsync("keyed", default);
+        var epoch = (long)
+            (
+                await f.Db.ScalarAsync(
+                    "SELECT deletion_epoch FROM tenant_leases WHERE tenant_id=$1",
+                    id
+                )
+            )!;
+        // A hostname is present when the finalizer takes the lock. SQL work must resume
+        // before the finalizer removes the wrapped key, regardless of prior progress.
+        await f.Db.ExecuteOwnerAsync("UPDATE operator_deletions SET sql_done=true");
+        Assert.False(
+            await f.Operator.ClusterAsync(
+                (tx, ct) =>
+                    Task.FromResult(
+                        (bool)tx.Scalar("SELECT foxwarm_operator_finish_delete($1,$2)", id, epoch)!
+                    ),
+                default
+            )
+        );
+        Assert.Equal(
+            1L,
+            await f.Db.ScalarAsync("SELECT count(*) FROM tenant_keys WHERE tenant_id=$1", id)
+        );
+        Assert.Equal(
+            false,
+            await f.Db.ScalarAsync("SELECT sql_done FROM operator_deletions WHERE tenant_id=$1", id)
+        );
+        using var done = new CancellationTokenSource();
+        var recovery = store.RunDeletionLoopAsync(done.Token);
+        try
+        {
+            await Until(async () =>
+                await f.Db.ScalarAsync("SELECT 1 FROM tenants WHERE tenant_id=$1", id) is null
+            );
+        }
+        finally
+        {
+            done.Cancel();
+            await recovery;
+        }
+    }
+
     [Theory]
     [InlineData("importing")]
     [InlineData("importing-agents")]

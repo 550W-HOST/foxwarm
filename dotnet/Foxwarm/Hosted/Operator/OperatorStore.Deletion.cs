@@ -1,6 +1,4 @@
 using System.Text.Json.Nodes;
-using Amazon.S3;
-using Amazon.S3.Model;
 using Foxwarm.Hosted.Blobs;
 using Foxwarm.Hosted.Postgres;
 
@@ -17,6 +15,7 @@ internal sealed partial class OperatorStore
                     throw new OperatorProblem(409, ImportInProgress);
                 if (tenant.State is not ("suspended" or "deleting"))
                     throw new OperatorProblem(409, "Suspend the tenant before deleting it.");
+                await RequireLifecycleReplicasAsync(tx, token);
                 if (tenant.State == "suspended")
                 {
                     await tx.ExecuteAsync(
@@ -56,12 +55,17 @@ internal sealed partial class OperatorStore
 
     // One page or SQL chunk per tenant per round. IDs paginate the queue, so a retained
     // object or large tenant cannot stop work for another. Restart needs only the DB rows.
-    internal async Task RunDeletionLoopAsync(CancellationToken ct)
+    internal Task RunDeletionLoopAsync(CancellationToken ct) =>
+        Task.WhenAll(RecoverSuspensionsAsync(ct), RecoverDeletionsAsync(ct));
+
+    private async Task RecoverDeletionsAsync(CancellationToken ct)
     {
+        var cursor = new ObjectSweep();
         while (!ct.IsCancellationRequested)
         {
             try
             {
+                cursor.BeginRound();
                 var after = 0;
                 while (true)
                 {
@@ -104,7 +108,7 @@ internal sealed partial class OperatorStore
                         after = job.Id;
                         try
                         {
-                            await AdvanceDeletionAsync(job, ct);
+                            await AdvanceDeletionAsync(job, cursor, ct);
                         }
                         catch (Exception error) when (!ct.IsCancellationRequested)
                         {
@@ -116,6 +120,8 @@ internal sealed partial class OperatorStore
                     if (jobs.Count < 32)
                         break;
                 }
+                await RecheckReceiptsAsync(cursor, ct);
+                cursor.EndRound();
                 await Task.Delay(TimeSpan.FromSeconds(1), ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -139,7 +145,7 @@ internal sealed partial class OperatorStore
         }
     }
 
-    private async Task AdvanceDeletionAsync(Job job, CancellationToken ct)
+    private async Task AdvanceDeletionAsync(Job job, ObjectSweep cursor, CancellationToken ct)
     {
         if (!job.SqlDone || job.Objects is null)
         {
@@ -212,13 +218,12 @@ internal sealed partial class OperatorStore
         {
             if (deletionS3 is null)
                 throw new InvalidDataException("The tenant's S3 storage is unavailable.");
-            // The empty proof must come from a listing started after the persisted settle
-            // deadline. Two workers can neither shorten the window nor apply a stale epoch.
-            if (!await SweepPageAsync(deletionS3, job.Identity, ct))
+            if (!await cursor.SweepAsync(deletionS3, job.Id, false, job.Identity, ct))
                 return;
             await database.ClusterAsync(
-                (tx, token) =>
-                    tx.ExecuteAsync(
+                async (tx, token) =>
+                {
+                    var changed = await tx.ExecuteAsync(
                         """
                         UPDATE operator_deletions SET settle_after=coalesce(settle_after,clock_timestamp()+make_interval(secs=>$3)),
                             objects_pending=NOT $4 WHERE tenant_id=$1 AND deletion_epoch=$2 AND objects_pending
@@ -228,7 +233,22 @@ internal sealed partial class OperatorStore
                         job.Epoch,
                         (Lease.LeaseTimings.Default.Ttl + S3Blobs.PutTimeout).TotalSeconds,
                         job.PastSettle
-                    ),
+                    );
+                    if (changed > 0 && job.PastSettle)
+                        await tx.ExecuteAsync(
+                            """
+                            INSERT INTO operator_object_receipts(tenant_id,slug,object_identity,endpoint,bucket,recheck_after)
+                            SELECT tenant_id,name,$2,$4,$5,clock_timestamp()+make_interval(secs=>$3) FROM tenants WHERE tenant_id=$1
+                            """,
+                            token,
+                            job.Id,
+                            job.Identity,
+                            LateWriteRecheck.TotalSeconds,
+                            deletionS3.Endpoint.AbsoluteUri,
+                            deletionS3.Bucket
+                        );
+                    return changed;
+                },
                 ct
             );
             return;
@@ -248,13 +268,6 @@ internal sealed partial class OperatorStore
                     is not int
                 )
                     return false;
-                await Scalar(
-                    tx,
-                    "SELECT foxwarm_operator_delete_chunk($1,$2,'tenant_keys',256)",
-                    token,
-                    job.Id,
-                    job.Epoch
-                );
                 return await Scalar(
                     tx,
                     "SELECT foxwarm_operator_finish_delete($1,$2)",
@@ -266,74 +279,5 @@ internal sealed partial class OperatorStore
             },
             ct
         );
-    }
-
-    private static async Task<bool> SweepPageAsync(
-        S3BlobSettings s3,
-        string identity,
-        CancellationToken ct
-    )
-    {
-        var (user, secret) = s3.ReadCredentials();
-        using var client = S3Blobs.Client(s3, user, secret);
-        var prefix = S3Blobs.TenantRoot(identity);
-        var mode = (
-            await client.GetBucketVersioningAsync(
-                new GetBucketVersioningRequest { BucketName = s3.Bucket },
-                ct
-            )
-        )
-            .VersioningConfig
-            ?.Status;
-        List<KeyVersion> keys;
-        if (mode == VersionStatus.Enabled || mode == VersionStatus.Suspended)
-        {
-            var page = await client.ListVersionsAsync(
-                new ListVersionsRequest
-                {
-                    BucketName = s3.Bucket,
-                    Prefix = prefix,
-                    MaxKeys = 256,
-                },
-                ct
-            );
-            keys = (page.Versions ?? [])
-                .Select(v => new KeyVersion { Key = v.Key, VersionId = v.VersionId })
-                .ToList();
-        }
-        else if (mode is null || mode == VersionStatus.Off)
-        {
-            var page = await client.ListObjectsV2Async(
-                new ListObjectsV2Request
-                {
-                    BucketName = s3.Bucket,
-                    Prefix = prefix,
-                    MaxKeys = 256,
-                },
-                ct
-            );
-            keys = (page.S3Objects ?? []).Select(v => new KeyVersion { Key = v.Key }).ToList();
-        }
-        else
-            throw new InvalidDataException($"Unknown bucket versioning status: {mode}.");
-        if (keys.Count == 0)
-            return true;
-        DeleteObjectsResponse deletion;
-        try
-        {
-            deletion = await client.DeleteObjectsAsync(
-                new DeleteObjectsRequest { BucketName = s3.Bucket, Objects = keys },
-                ct
-            );
-        }
-        catch (DeleteObjectsException error)
-        {
-            deletion = error.Response;
-        }
-        if (deletion.DeleteErrors?.FirstOrDefault() is { } failure)
-            throw new IOException(
-                $"S3 delete failed: {failure.Code}: {failure.Message} Check object retention, legal holds and the operator's deletion permissions."
-            );
-        return false;
     }
 }

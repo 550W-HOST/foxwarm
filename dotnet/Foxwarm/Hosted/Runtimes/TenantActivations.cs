@@ -580,6 +580,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                     else if (held.IsCurrent(clock()))
                     {
                         slot.Grant = held;
+                        slot.StaleEpoch = null;
                         // A new grant supersedes every earlier hand-back and unknown outcome.
                         slot.Releases.Clear();
                         slot.UncertainUntil = 0;

@@ -352,7 +352,8 @@ internal enum PutOutcome
 internal static class S3Blobs
 {
     // Bounds the entire dispatched PUT, including SDK retries; deletion waits an extra
-    // lease TTL plus this same timeout before accepting its final empty listing.
+    // lease TTL plus this timeout before its settled listing. A later receipt rechecks
+    // already-dispatched PUTs that may still reach storage after caller cancellation.
     internal static readonly TimeSpan PutTimeout = TimeSpan.FromSeconds(100);
 
     internal const string ProbeKey = ".probe/conditional-write";

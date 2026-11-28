@@ -198,6 +198,22 @@ public sealed class OperatorProcessTests
                     Assert.Equal(status, uploaded.StatusCode);
                 }
             }
+            // The same running replica sees a different row whose first serving epoch repeats.
+            var repeated = new JsonObject { ["slug"] = "reused", ["profile"] = "hosted", ["primaryHostname"] = "reused.test" };
+            long? firstEpoch = null;
+            for (var generation = 0; generation < 2; generation++)
+            {
+                var token = (string)(await Call(HttpMethod.Post, "/tenants", repeated)).Json["setupToken"]!;
+                var served = await Send(client, HttpMethod.Post, front + "/api/auth", "reused.test", body:new JsonObject { ["token"] = token });
+                Assert.Equal(HttpStatusCode.OK, served.Status);
+                var current = await harness.EpochAsync("reused");
+                if (firstEpoch.HasValue) Assert.Equal(firstEpoch.Value, current);
+                else firstEpoch = current;
+                Assert.Equal(HttpStatusCode.OK,(await Call(HttpMethod.Post,"/tenants/reused/suspend")).Status);
+                Assert.Equal(HttpStatusCode.Accepted,(await Call(HttpMethod.Delete,"/tenants/reused")).Status);
+                await Until(async ()=>(await Call(HttpMethod.Get,"/tenants/reused")).Status == HttpStatusCode.NotFound);
+            }
+            Assert.Empty((await Call(HttpMethod.Get,"/deletions")).Json.AsArray());
             var changed = new JsonObject { ["limits"] = new JsonObject { ["requestsPerSecond"] = 1, ["requestBurst"] = 1, ["dbStatements"] = 2, ["agentStoreFiles"] = 200 }, ["journal"] = new JsonObject { ["enabled"] = false, ["retentionDays"] = 2 } };
             Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Patch, "/tenants/alpha", changed)).Status);
             await Until(async () => { await AsAdmin(reusable, "/health"); return await harness.EpochAsync("alpha") > epoch; });

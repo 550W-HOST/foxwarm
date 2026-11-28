@@ -110,9 +110,18 @@ internal sealed partial class OperatorStore(PgDatabase database, KeyEncryptionKe
 
     private static async Task RequireCurrentReplicas(PgTx tx, CancellationToken ct)
     {
-        if (await Scalar(tx, "SELECT 1 FROM tenant_leases l LEFT JOIN replicas r ON r.replica_id=l.owner_replica WHERE l.state='active' AND l.expires_at>clock_timestamp() AND (r.binary_level IS NULL OR r.binary_level<1200) LIMIT 1", ct) is int)
+        if (await HasOlderOwnerAsync(tx, 1200, ct))
             throw new OperatorProblem(409, "Finish upgrading all live replicas before creating a tenant or rotating its access token.");
     }
+
+    private static async Task RequireLifecycleReplicasAsync(PgTx tx, CancellationToken ct)
+    {
+        if (await HasOlderOwnerAsync(tx, 1201, ct))
+            throw new OperatorProblem(409, "Finish upgrading all live replicas before suspending or deleting a tenant.");
+    }
+
+    private static async Task<bool> HasOlderOwnerAsync(PgTx tx, int requiredLevel, CancellationToken ct) =>
+        await Scalar(tx, "SELECT 1 FROM tenant_leases l LEFT JOIN replicas r ON r.replica_id=l.owner_replica WHERE l.state='active' AND l.expires_at>clock_timestamp() AND (r.binary_level IS NULL OR r.binary_level<$1) LIMIT 1", ct, requiredLevel) is int;
 
     private static async Task<string> IssueSetupAsync(PgTx tx, int id, long version, CancellationToken ct)
     {

@@ -42,6 +42,7 @@ internal sealed partial class OperatorStore
                     throw new OperatorProblem(409, ImportInProgress);
                 if (tenant.State is not ("active" or "suspended"))
                     throw new OperatorProblem(409, "Only an active tenant can be suspended.");
+                await RequireLifecycleReplicasAsync(tx, token);
                 if (tenant.State == "active")
                 {
                     await tx.ExecuteAsync(
@@ -65,45 +66,18 @@ internal sealed partial class OperatorStore
                 await database.ClusterAsync(
                     async (tx, token) =>
                     {
-                        // Resume/delete own this same row; never finish an older suspend after
-                        // either transition has committed.
-                        if (
-                            await Scalar(
+                        await RevokeOverdueAsync(tx, original.Id, original.Epoch, token);
+                        return await Scalar(
                                 tx,
-                                "SELECT 1 FROM tenant_leases WHERE tenant_id=$1 AND epoch=$2 FOR UPDATE",
-                                token,
-                                original.Id,
-                                original.Epoch
-                            )
-                            is not int
-                        )
-                            return false;
-                        var waiting = await Scalar(
-                            tx,
-                            """
-                            SELECT draining_since+make_interval(secs=>$3)>clock_timestamp()
-                            FROM tenant_leases l JOIN tenants t USING(tenant_id)
-                            WHERE l.tenant_id=$1 AND l.epoch=$2 AND t.state='suspended' AND l.state='active'
-                            AND l.expires_at>clock_timestamp()
-                            """,
-                            token,
-                            original.Id,
-                            original.Epoch,
-                            DrainBound.TotalSeconds
-                        );
-                        if (waiting is true)
-                            return true;
-                        if (waiting is false)
-                            await tx.ExecuteAsync(
                                 """
-                                UPDATE tenant_leases l SET state='released',epoch=l.epoch+1,expires_at=clock_timestamp()
-                                FROM tenants t WHERE t.tenant_id=l.tenant_id AND l.tenant_id=$1 AND l.epoch=$2 AND l.state='active' AND t.state='suspended'
+                                SELECT 1 FROM tenant_leases l JOIN tenants t USING(tenant_id)
+                                WHERE l.tenant_id=$1 AND l.epoch=$2 AND t.state='suspended' AND l.state='active'
+                                    AND l.expires_at>clock_timestamp()
                                 """,
                                 token,
                                 original.Id,
                                 original.Epoch
-                            );
-                        return false;
+                            ) is int;
                     },
                     ct
                 )
@@ -111,6 +85,55 @@ internal sealed partial class OperatorStore
                 await Task.Delay(TimeSpan.FromMilliseconds(100), ct);
         }
         return new JsonObject { ["slug"] = slug, ["state"] = "suspended" };
+    }
+
+    // The request and recovery worker use the same epoch transition. No HTTP request or
+    // in-process timer owns a suspension: its deadline is persisted on the lease.
+    private static Task<int> RevokeOverdueAsync(
+        PgTx tx,
+        int? id,
+        long? epoch,
+        CancellationToken token
+    ) =>
+        tx.ExecuteAsync(
+            """
+            WITH overdue AS (
+                SELECT l.tenant_id,l.epoch FROM tenant_leases l JOIN tenants t USING(tenant_id)
+                WHERE t.state='suspended' AND l.state='active' AND l.draining_since+make_interval(secs=>$3)<=clock_timestamp()
+                    AND ($1::integer IS NULL OR l.tenant_id=$1 AND l.epoch=$2::bigint)
+                ORDER BY l.draining_since LIMIT 256 FOR UPDATE OF l SKIP LOCKED
+            ) UPDATE tenant_leases l SET state='released', epoch=l.epoch+1, expires_at=clock_timestamp()
+            FROM overdue o WHERE l.tenant_id=o.tenant_id AND l.epoch=o.epoch
+            """,
+            token,
+            id,
+            epoch,
+            DrainBound.TotalSeconds
+        );
+
+    private async Task RecoverSuspensionsAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await database.ClusterAsync(
+                        (tx, token) => RevokeOverdueAsync(tx, null, null, token),
+                        ct
+                    );
+                }
+                catch (Exception error) when (!ct.IsCancellationRequested)
+                {
+                    Console.Error.WriteLine(
+                        $"[operator] Cannot enforce suspended leases: {error.Message}"
+                    );
+                }
+                await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
     }
 
     internal Task<JsonObject> ResumeAsync(string slug, CancellationToken ct) =>

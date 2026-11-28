@@ -104,7 +104,7 @@ internal static class OperatorServer
             return;
         }
         var segments = (remaining.Value ?? "").Trim('/').Split('/');
-        if ((request.Method, segments) is not ("GET", ["placement"] or ["tenants"] or ["tenants", _] or ["profiles", _, "ceiling"])
+        if ((request.Method, segments) is not ("GET", ["placement"] or ["deletions"] or ["tenants"] or ["tenants", _] or ["profiles", _, "ceiling"])
             and not ("POST", ["tenants"] or ["tenants", _, "rotate" or "suspend" or "resume"]) and not ("DELETE", ["tenants", _]) and not ("PATCH", ["tenants", _]) and not ("PUT", ["profiles", _, "ceiling"]))
         {
             response.StatusCode = 404;
@@ -124,6 +124,7 @@ internal static class OperatorServer
             JsonNode result;
             switch (request.Method, segments)
             {
+                case ("GET", ["deletions"]): result = await store.ReadReceiptsAsync(ct); break;
                 case ("GET", ["placement"]): result = await store.PlacementAsync(ct); break;
                 case ("GET", ["tenants"]): result = await store.ReadAsync(null, ct); break;
                 case ("GET", ["tenants", var slug]): result = await store.ReadAsync(slug, ct); break;

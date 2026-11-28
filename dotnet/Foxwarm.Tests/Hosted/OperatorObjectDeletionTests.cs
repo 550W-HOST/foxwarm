@@ -23,7 +23,7 @@ public sealed class OperatorObjectDeletionTests
     [InlineData("off")]
     [InlineData("suspended")]
     [InlineData("locked")]
-    public async Task Physical_erasure_rechecks_the_prefix_after_a_late_put(string mode)
+    public async Task The_worker_rechecks_only_the_old_namespace_after_late_puts(string mode)
     {
         var server = await S3Server.SharedAsync(enableVersioning: true);
         await using var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
@@ -131,8 +131,40 @@ public sealed class OperatorObjectDeletionTests
                 )
                     is true
             );
-            proxy.ReleasePut.TrySetResult();
-            var late = await put;
+            var heldVersions = new List<string>();
+            if (mode != "off")
+            {
+                proxy.ReleasePut.TrySetResult();
+                var late = await put;
+                if (mode == "locked")
+                {
+                    heldVersions.Add(late.VersionId);
+                    // Fill the first version page at one key. A later key must be removed
+                    // before any of these holds are lifted (both S3 markers matter).
+                    for (int i = 1; i < 256; i++)
+                        heldVersions.Add(
+                            (
+                                await s3.PutObjectAsync(
+                                    new PutObjectRequest
+                                    {
+                                        BucketName = bucket,
+                                        Key = lateKey,
+                                        ContentBody = "held",
+                                        ObjectLockLegalHoldStatus = ObjectLockLegalHoldStatus.On,
+                                    }
+                                )
+                            ).VersionId
+                        );
+                    await s3.PutObjectAsync(
+                        new PutObjectRequest
+                        {
+                            BucketName = bucket,
+                            Key = prefix + "z",
+                            ContentBody = "unprotected",
+                        }
+                    );
+                }
+            }
             Assert.True((bool)(await store.ReadAsync("alpha", default))["objectsPending"]!);
             Assert.Equal(
                 1L,
@@ -145,25 +177,39 @@ public sealed class OperatorObjectDeletionTests
             );
             if (mode == "locked")
             {
+                await Until(async () =>
+                    (
+                        (
+                            await s3.ListVersionsAsync(
+                                new ListVersionsRequest
+                                {
+                                    BucketName = bucket,
+                                    Prefix = prefix + "z",
+                                }
+                            )
+                        ).Versions
+                        ?? []
+                    ).Count == 0
+                );
                 // A genuine protected version refuses an ordinary delete even to the bucket owner.
                 var response = await Assert.ThrowsAsync<AmazonS3Exception>(() =>
-                    s3.DeleteObjectAsync(bucket, lateKey, late.VersionId)
+                    s3.DeleteObjectAsync(bucket, lateKey, heldVersions[0])
                 );
                 Assert.Equal(System.Net.HttpStatusCode.Forbidden, response.StatusCode);
-                await Task.Delay(TimeSpan.FromSeconds(2));
                 Assert.True((bool)(await store.ReadAsync("alpha", default))["objectsPending"]!);
-                await s3.PutObjectLegalHoldAsync(
-                    new PutObjectLegalHoldRequest
-                    {
-                        BucketName = bucket,
-                        Key = lateKey,
-                        VersionId = late.VersionId,
-                        LegalHold = new ObjectLockLegalHold
+                foreach (var held in heldVersions)
+                    await s3.PutObjectLegalHoldAsync(
+                        new PutObjectLegalHoldRequest
                         {
-                            Status = ObjectLockLegalHoldStatus.Off,
-                        },
-                    }
-                );
+                            BucketName = bucket,
+                            Key = lateKey,
+                            VersionId = held,
+                            LegalHold = new ObjectLockLegalHold
+                            {
+                                Status = ObjectLockLegalHoldStatus.Off,
+                            },
+                        }
+                    );
             }
             await Until(async () =>
                 await db.ScalarAsync("SELECT 1 FROM tenants WHERE tenant_id=$1", id) is null
@@ -189,6 +235,92 @@ public sealed class OperatorObjectDeletionTests
             Assert.NotEqual(
                 identity,
                 await db.ScalarAsync("SELECT object_identity FROM tenants WHERE name='alpha'")
+            );
+            var pending = Assert.Single((await store.ReadReceiptsAsync(default)).AsArray())!;
+            Assert.Equal(id, (int)pending["tenantId"]!);
+            Assert.True(
+                await db.ScalarAsync(
+                    "SELECT recheck_after-observed_empty_at>=interval '23 hours 59 minutes' FROM operator_object_receipts WHERE tenant_id=$1",
+                    id
+                )
+                    is true
+            );
+            var sibling = (string)
+                (await db.ScalarAsync("SELECT object_identity FROM tenants WHERE name='alpha'"))!;
+            var siblingKey = S3Blobs.TenantRoot(sibling) + "artifacts/keep";
+            var keeper = await s3.PutObjectAsync(
+                new PutObjectRequest
+                {
+                    BucketName = bucket,
+                    Key = siblingKey,
+                    ContentBody = "new tenant",
+                }
+            );
+            if (mode == "off")
+            {
+                // This was dispatched before deletion but reaches storage only after its
+                // old tenant is gone. The receipt survives a worker restart and slug reuse.
+                proxy.ReleasePut.TrySetResult();
+                await put;
+                Assert.NotEmpty(
+                    (
+                        await s3.ListObjectsV2Async(
+                            new ListObjectsV2Request { BucketName = bucket, Prefix = prefix }
+                        )
+                    ).S3Objects
+                        ?? []
+                );
+            }
+            stop.Cancel();
+            await worker;
+            await db.ExecuteOwnerAsync(
+                "UPDATE operator_object_receipts SET recheck_after=clock_timestamp()-interval '1 second'"
+            );
+            using var again = new CancellationTokenSource();
+            var recovery = store.RunDeletionLoopAsync(again.Token);
+            try
+            {
+                await Until(async () =>
+                    (await store.ReadReceiptsAsync(default)).AsArray().Count == 0
+                );
+            }
+            finally
+            {
+                again.Cancel();
+                await recovery;
+            }
+            Assert.Empty(
+                (
+                    await s3.ListObjectsV2Async(
+                        new ListObjectsV2Request { BucketName = bucket, Prefix = prefix }
+                    )
+                ).S3Objects
+                    ?? []
+            );
+            Assert.Equal(
+                siblingKey,
+                Assert
+                    .Single(
+                        (
+                            await s3.ListObjectsV2Async(
+                                new ListObjectsV2Request
+                                {
+                                    BucketName = bucket,
+                                    Prefix = S3Blobs.TenantRoot(sibling),
+                                }
+                            )
+                        ).S3Objects
+                            ?? []
+                    )
+                    .Key
+            );
+            await s3.DeleteObjectAsync(
+                new DeleteObjectRequest
+                {
+                    BucketName = bucket,
+                    Key = siblingKey,
+                    VersionId = mode == "off" ? null : keeper.VersionId ?? "null",
+                }
             );
             await s3.DeleteBucketAsync(bucket);
         }
