@@ -38,8 +38,7 @@
           <button id="showTenants" aria-pressed="true">Tenants</button
           ><button id="showReplicas" aria-pressed="false">Replicas</button>
         </nav>
-        <section id="tenants">
-          <h2>Tenants</h2>
+        <section id="tenants" aria-labelledby="showTenants">
           <div class="scroll">
             <table>
               <thead>
@@ -55,8 +54,7 @@
             </table>
           </div>
         </section>
-        <section id="replicas" hidden>
-          <h2>Replicas</h2>
+        <section id="replicas" aria-labelledby="showReplicas" hidden>
           <div class="scroll">
             <table>
               <thead>

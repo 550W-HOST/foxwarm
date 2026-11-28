@@ -241,3 +241,8 @@ summary {
   margin: 0.25rem 0 0;
   padding-left: 1.35rem;
 }
+
+#tenantRows td:nth-child(3),
+#replicaRows td:first-child {
+  white-space: nowrap;
+}
