@@ -24,6 +24,8 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         .Select(value => value!.GetValue<string>())
         .ToArray();
     private readonly int timeoutSeconds = (int)(SessionWait.Number(config["timeoutSeconds"]) ?? 90);
+    // Reject duplicate fields throughout the envelope before JsonObject lazily indexes them.
+    internal static readonly JsonDocumentOptions ResponseOptions = new() { AllowDuplicateProperties = false };
     private int active;
     private readonly object descriptionGate = new();
     private Task<JsonObject>? description;
@@ -370,7 +372,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
             JsonObject response;
             try
             {
-                response = Object(JsonNode.Parse(raw));
+                response = Object(JsonNode.Parse(raw, documentOptions: ResponseOptions));
             }
             catch (JsonException)
             {

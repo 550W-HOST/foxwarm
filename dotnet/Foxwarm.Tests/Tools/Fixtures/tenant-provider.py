@@ -68,5 +68,9 @@ elif operation == 'filesystem':
 else:
     raise ValueError(operation)
 if operation == 'describe':
-    print('fixture diagnostic', file=sys.stderr)
+    detail = root / ('diagnostic-' + str(tenant))
+    print('fixture diagnostic' + (' ' + detail.read_text() if detail.exists() else ''), file=sys.stderr)
+    if mode == 'duplicate':
+        print(json.dumps(dict(identity, ok=True))[:-1] + ',"result":{"label":"first","label":"second"}}')
+        sys.exit(0)
 send(dict(identity, ok=True, result=result))

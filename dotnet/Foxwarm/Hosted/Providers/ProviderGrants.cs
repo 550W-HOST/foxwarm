@@ -45,12 +45,19 @@ internal sealed class ProviderGrants(DeploymentConfiguration deployment, Action<
     }
 
     internal async Task<TenantProviders> LoadAsync(
-        TenantDb database, string slug, TenantProfile profile, CancellationToken token
+        TenantDb database, string slug, TenantProfile profile, CancellationToken token, bool applyGrants = true
     )
     {
         var grants = await database.ReadAsync(async (tx, ct) =>
         {
             var rows = new Dictionary<string, JsonNode?>(StringComparer.Ordinal);
+            if (!applyGrants)
+            {
+                using var any = tx.Command("SELECT 1 FROM provider_grants WHERE tenant_id=$1 LIMIT 1", database.TenantId);
+                if (await any.ExecuteScalarAsync(ct).ConfigureAwait(false) is not null)
+                    (diagnostic ?? Console.Error.WriteLine)("Provider grants aren't applied in single-tenant hosted mode.");
+                return rows;
+            }
             using var cmd = tx.Command(
                 "SELECT provider_id, quotas::text FROM provider_grants WHERE tenant_id=$1", database.TenantId
             );
@@ -104,6 +111,22 @@ internal sealed class ProviderGrants(DeploymentConfiguration deployment, Action<
                     ? "tenancy-mismatch" : "describe-failed";
             }
         }
+        // A qualified child cannot stand in for an unavailable Provider parent. Remove the
+        // affected subtree before the Node registry validates the remaining inventory.
+        bool removed;
+        do
+        {
+            removed = false;
+            foreach (var (id, driver) in selected.Drivers.ToArray())
+            {
+                if (driver.ParentNode is not { } parent) continue;
+                var slash = parent.IndexOf('/');
+                if (slash < 0 || selected.Drivers.ContainsKey(parent[..slash])) continue;
+                selected.Drivers.Remove(id);
+                selected.Problems[id] = "parent-not-granted";
+                removed = true;
+            }
+        } while (removed);
         return selected;
     }
 

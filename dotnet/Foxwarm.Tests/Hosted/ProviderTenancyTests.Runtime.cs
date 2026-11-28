@@ -62,11 +62,12 @@ public sealed partial class ProviderTenancyTests
         if (!OperatingSystem.IsLinux()) return;
         using var temp = new TempDirectory();
         var deployment = Deployment(temp.Path,("extended","extended",true),("legacy","legacy",false),
-            ("mismatch","legacy",true),("broken","broken",true),("ungranted","extended",true));
+            ("mismatch","legacy",true),("broken","broken",true),("duplicate","duplicate",true),("ungranted","extended",true),("child","extended",true));
+        deployment.Root["nodeProviders"]!["child"]!["parentNode"] = "ungranted/anchor";
         await using var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
         var slug = PostgresServer.Tenant;
         if (master) await db.ExecuteOwnerAsync("UPDATE tenants SET profile='operator'");
-        await db.ExecuteOwnerAsync("INSERT INTO provider_grants(tenant_id,provider_id) SELECT tenant_id,id FROM tenants CROSS JOIN unnest(ARRAY['extended','broken','mismatch']) id");
+        await db.ExecuteOwnerAsync("INSERT INTO provider_grants(tenant_id,provider_id) SELECT tenant_id,id FROM tenants CROSS JOIN unnest(ARRAY['extended','broken','mismatch','duplicate','child']) id");
         var key = Path.Combine(temp.Path,"kek","current.key");
         _ = InstanceKeys.OpenOrCreate(key);
         var boot = new HostedBootstrap(null,null,slug,PostgresServer.AppRole,ScratchRoot:Path.Combine(temp.Path,"scratch"),KekFile:key);
@@ -89,6 +90,7 @@ public sealed partial class ProviderTenancyTests
             Assert.Equal(master,registry.HasProvider("ungranted"));
             Assert.False(registry.HasProvider("mismatch"));
             Assert.False(registry.HasProvider("broken"));
+            Assert.False(registry.HasProvider("duplicate"));
             var calls = Calls(temp.Path);
             Assert.Equal(master,calls.Any(c=>c["providerId"]?.ToString()=="legacy"));
             Assert.All(calls.Where(c=>c["providerId"]?.ToString()=="legacy"),c=>Assert.False(c.ContainsKey("tenantId")));
@@ -97,7 +99,10 @@ public sealed partial class ProviderTenancyTests
             while ((raw=await db.ScalarAsync("SELECT (capacity->'tenants'->$1->'providerProblems')::text FROM replicas WHERE name='provider-host'",slug) as string) is null)
                 await Task.Delay(20,bound.Token);
             var problems = JsonNode.Parse(raw)!.AsObject();
-            Assert.Equal(2,problems.Count);
+            Assert.Equal(master ? 3 : 4, problems.Count);
+            Assert.Equal(master, registry.HasProvider("child"));
+            if (!master) Assert.Equal("parent-not-granted", problems["child"]!.ToString());
+            Assert.Equal("describe-failed",problems["duplicate"]!.ToString());
             Assert.Equal("tenancy-mismatch",problems["mismatch"]!.ToString());
             Assert.Equal("describe-failed",problems["broken"]!.ToString());
             if (master)
