@@ -13,21 +13,21 @@ internal static class ImageInputPolicy
     internal static bool IsProviderImage(string mime) =>
         RasterCodec.IsSafeRaster(mime) || RasterCodec.IsHeif(mime);
 
-    internal static bool IsOversized(byte[] bytes, string mime)
+    internal static async Task<bool> IsOversizedAsync(
+        TenantImageDecoder decoder,
+        byte[] bytes,
+        string mime,
+        CancellationToken token = default
+    )
     {
         if (bytes.LongLength > MaxBytes)
             return true;
-        if (RasterCodec.IsHeif(mime))
-        {
-            var dimensions = HeifDecoder.Inspect(bytes);
-            return (long)dimensions.Width * dimensions.Height > HeifDecoder.MaxPixels;
-        }
         if (mime == "image/tiff")
         {
             var dimensions = TiffMetadata.Inspect(bytes);
             return (long)dimensions.Width * dimensions.Height > HeifDecoder.MaxPixels;
         }
-        var probe = RasterCodec.Inspect(bytes, mime, enforcePixelLimit: false);
+        var probe = await decoder.InspectAsync(bytes, mime, limit: false, token);
         return (long)probe.Width * probe.Height > HeifDecoder.MaxPixels;
     }
 }

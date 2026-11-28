@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <DefineConstants>$(DefineConstants);FOXWARM_IMAGE_DECODER</DefineConstants>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <EventSourceSupport>false</EventSourceSupport>
+    <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>
+    <ILLinkTreatWarningsAsErrors>true</ILLinkTreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Foxwarm.ImageDecoder/Sandbox.cs;../../Foxwarm.ImageDecoder/Pipes.cs;../../Foxwarm/Images/ImageDecoderProcess.cs;../../Foxwarm/Images/RasterCodec.cs;../../Foxwarm/Images/HeifDecoder.cs;../../Foxwarm/Images/RasterCrop.cs;../../Foxwarm/Images/DecoderProtocol.cs" />
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" />
+  </ItemGroup>
+</Project>

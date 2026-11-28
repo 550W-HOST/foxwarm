@@ -19,12 +19,8 @@ internal static class RasterCodec
 
     internal static bool IsHeif(string mime) => mime is "image/heic" or "image/heif";
 
-    internal static Probe Inspect(byte[] bytes, string declaredMime, bool enforcePixelLimit = true)
-    {
-        using var data = SKData.CreateCopy(bytes);
-        using var codec =
-            SKCodec.Create(data) ?? throw new ImageInputException("Image raster is invalid.") { InvalidRaster = true };
-        var mime = codec.EncodedFormat switch
+    private static string MimeOf(SKCodec codec) =>
+        codec.EncodedFormat switch
         {
             SKEncodedImageFormat.Png => "image/png",
             SKEncodedImageFormat.Jpeg => "image/jpeg",
@@ -32,6 +28,36 @@ internal static class RasterCodec
             SKEncodedImageFormat.Gif => "image/gif",
             _ => "application/octet-stream",
         };
+
+    internal static string? Identify(SKCodec? codec)
+    {
+        if (codec is null)
+            return null;
+        ValidatePixels(codec.Info.Width, codec.Info.Height);
+        var mime = MimeOf(codec);
+        return IsSafeRaster(mime) ? mime : null;
+    }
+
+    internal static string? IdentifyFile(string path)
+    {
+        try
+        {
+            using var input = new SKFileStream(path);
+            using var codec = SKCodec.Create(input);
+            return Identify(codec);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static Probe Inspect(byte[] bytes, string declaredMime, bool enforcePixelLimit = true)
+    {
+        using var data = SKData.CreateCopy(bytes);
+        using var codec =
+            SKCodec.Create(data) ?? throw new ImageInputException("Image raster is invalid.") { InvalidRaster = true };
+        var mime = MimeOf(codec);
         if (mime != declaredMime)
             throw new ImageInputException("Image bytes do not match the declared MIME type.") { InvalidRaster = true };
         if (enforcePixelLimit)

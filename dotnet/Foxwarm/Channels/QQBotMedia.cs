@@ -381,7 +381,9 @@ internal sealed class QQBotMedia(
                 var size = await DownloadAsync(url, spool, fetchLimit);
                 total += size;
                 downloaded = true;
-                var raster = size <= ImageLimit ? QQBotRaster.Probe(spool) : null;
+                var raster = size <= ImageLimit
+                    ? await sessions.Images.Decoder.IdentifyFileAsync(spool, CancellationToken.None)
+                    : null;
                 if (raster is null && size > FileLimit)
                     throw TooLarge();
                 IReadOnlyList<JsonObject> saved;
@@ -397,6 +399,10 @@ internal sealed class QQBotMedia(
                         raster is not null,
                         CancellationToken.None
                     );
+                }
+                catch (Foxwarm.Images.ImageProcessingException)
+                {
+                    throw;
                 }
                 catch
                 {
@@ -421,7 +427,9 @@ internal sealed class QQBotMedia(
             }
             catch (Exception error)
             {
-                var safe = error is MediaError ? error.Message : "media download failed";
+                var safe = error is MediaError or Foxwarm.Images.ImageProcessingException
+                    ? error.Message
+                    : "media download failed";
                 if (
                     error is Oversized
                     && !downloaded

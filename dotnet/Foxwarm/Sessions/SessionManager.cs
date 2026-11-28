@@ -132,7 +132,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (Capabilities.Limits is not null)
             hotCharges = new(ReferenceEqualityComparer.Instance);
         limitedImageBlobs = blobQuota?.Apply(Storage.ImageBlobs);
-        Images = new(root, limitedImageBlobs ?? Storage.ImageBlobs);
+        Images = new(
+            root,
+            limitedImageBlobs ?? Storage.ImageBlobs,
+            Foxwarm.Images.TenantImageDecoder.ForStorage(Storage)
+        );
         Artifacts = new(
             Path.Combine(root, "state", "artifacts"),
             ArtifactPreparation,

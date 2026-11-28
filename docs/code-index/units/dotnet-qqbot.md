@@ -92,7 +92,7 @@ to fetch and save media. First guest and unauthorized messages remain
 metadata-only, while later authorized messages may materialize. Direct video and
 voice are saved as generic bounded files; voice prefers an allowlisted
 `voice_wav_url` and includes bounded `asr_refer_text` metadata. Declared MIME
-and filename are hints only. A best-effort Sharp probe detects PNG/JPEG/GIF/WebP
+and filename are hints only. A raster probe (the [isolated worker](./hosted-image-decoder.md) for hosted tenants) detects PNG/JPEG/GIF/WebP
 for optional inline image data under the safe cap; all other bytes stay generic.
 Inline image bytes remain transient until the shared
 content-addressed image-blob conversion runs before durable queue/history

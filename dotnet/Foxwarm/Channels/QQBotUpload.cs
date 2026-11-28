@@ -49,7 +49,8 @@ internal static class QQBotUpload
         HttpClient http,
         Action requireCurrent,
         CancellationToken token,
-        TimeSpan? partTimeout = null
+        TimeSpan? partTimeout,
+        Foxwarm.Images.TenantImageDecoder decoder
     )
     {
         requireCurrent();
@@ -79,7 +80,7 @@ internal static class QQBotUpload
             20L * QQBotMedia.MiB
         );
         var fileLimit = QQBotMedia.Limit(config?["fileMaxBytes"], 50L * QQBotMedia.MiB, HardCap);
-        var image = size <= imageLimit && QQBotRaster.OfficialImage(file.Path);
+        var image = size <= imageLimit && (await decoder.IdentifyFileAsync(file.Path, token) is not null || QQBotRaster.ValidBmp(file.Path));
         if (!image && size > fileLimit)
             throw new IOException("QQ Bot file exceeds the configured media limit.");
         var fileType = image ? 1 : 4;

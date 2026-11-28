@@ -1,38 +1,10 @@
 using System.Buffers.Binary;
-using Foxwarm.Images;
-using SkiaSharp;
 
 namespace Foxwarm.Channels;
 
 internal static class QQBotRaster
 {
-    internal static string? Probe(string path)
-    {
-        try
-        {
-            using var input = new SKFileStream(path);
-            using var codec = SKCodec.Create(input);
-            if (codec is null)
-                return null;
-            RasterCodec.ValidatePixels(codec.Info.Width, codec.Info.Height);
-            return codec.EncodedFormat switch
-            {
-                SKEncodedImageFormat.Png => "image/png",
-                SKEncodedImageFormat.Jpeg => "image/jpeg",
-                SKEncodedImageFormat.Gif => "image/gif",
-                SKEncodedImageFormat.Webp => "image/webp",
-                _ => null,
-            };
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    internal static bool OfficialImage(string path) => Probe(path) is not null || ValidBmp(path);
-
-    private static bool ValidBmp(string path)
+    internal static bool ValidBmp(string path)
     {
         try
         {

@@ -115,8 +115,14 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 byte[]? bytes = null;
                 if (isImage)
                 {
-                    if (source.Length > ImageInputPolicy.MaxBytes)
+                    long length = source.Length;
+                    if (length > ImageInputPolicy.MaxBytes)
                         isImage = false;
+                    else if (sessions.Images.Decoder.NeedsStagedProbe(mime))
+                    {
+                        (bytes, isImage) = await sessions.Images.Decoder.ProbeStagedAsync(source, (int)length, mime, token);
+                        source.Position = 0;
+                    }
                     else
                     {
                         using var buffer = new MemoryStream();
@@ -124,9 +130,11 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                         bytes = buffer.ToArray();
                         try
                         {
-                            isImage = !ImageInputPolicy.IsOversized(bytes, mime);
+                            isImage = !await ImageInputPolicy.IsOversizedAsync(
+                                sessions.Images.Decoder, bytes, mime, token
+                            );
                         }
-                        catch (ImageInputException)
+                        catch (ImageInputException error) when (error is not ImageProcessingException)
                         { /* Invalid metadata retains ordinary image ingress failure. */
                         }
                         source.Position = 0;
@@ -239,7 +247,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
         catch (Exception error)
         {
             throw new UploadPreparationException(
-                "Attachment preparation failed. "
+                (error is ImageProcessingException ? "" : "Attachment preparation failed. ")
                     + (
                         saved.Count > 0
                             ? $"{saved.Count} file(s) were saved and were not removed. "

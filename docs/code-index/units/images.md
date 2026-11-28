@@ -1,6 +1,6 @@
 # Unit: Image blobs, codecs, transport, and provider parts
 
-Files: `dotnet/Foxwarm/Images/HeifDecoder.cs`, `dotnet/Foxwarm/Images/ImageBlobStore.Provider.cs`, `dotnet/Foxwarm/Images/ImageBlobStore.cs`, `dotnet/Foxwarm/Images/ImageTokenEstimate.cs`, `dotnet/Foxwarm/Images/ImageTransport.cs`, `dotnet/Foxwarm/Images/ProviderImageDedup.cs`, `dotnet/Foxwarm/Images/RasterCodec.cs`, `dotnet/Foxwarm/Images/ImageInputPolicy.cs`, `dotnet/Foxwarm/Images/TiffMetadata.cs`
+Files: `dotnet/Foxwarm/Images/HeifDecoder.cs`, `dotnet/Foxwarm/Images/ImageBlobStore.Provider.cs`, `dotnet/Foxwarm/Images/ImageBlobStore.cs`, `dotnet/Foxwarm/Images/ImageTokenEstimate.cs`, `dotnet/Foxwarm/Images/ImageTransport.cs`, `dotnet/Foxwarm/Images/ProviderImageDedup.cs`, `dotnet/Foxwarm/Images/RasterCodec.cs`, `dotnet/Foxwarm/Images/ImageInputPolicy.cs`, `dotnet/Foxwarm/Images/TiffMetadata.cs`, `dotnet/Foxwarm/Images/RasterCrop.cs`
 
 ## Purpose
 
@@ -30,6 +30,8 @@ Model image input is limited to PNG, JPEG, WebP, GIF and HEIF, plus TIFF at ingr
 ### D-tool-result-image-reference
 
 [2026-09-19] A tool result may hand back an image either as inline bytes or as a canonical part referencing bytes already stored in the image Blob store. The reference form keeps base64 out of the tool result, session history, and request journal, and it is accepted only when every identity field is present and the Blob id names a safe raster type, so ordinary JSON cannot be mistaken for an image. The referenced bytes are read back before the part becomes session-visible, so a missing or corrupt Blob fails the tool result explicitly rather than producing a dangling image or a silently empty one. The materialized part reuses the tool-result image id convention (`<toolUseId>#<n>`) that the inline form already establishes, keeps the source reference and its byte metadata unchanged, and deliberately does not copy assistant-image provenance or provider metadata into a tool result.
+
+`RasterCrop` owns pixel decoding, rectangle checks and encoded crop output for file delivery and the [isolated hosted decoder](./hosted-image-decoder.md). Session lookup, source authorization and tool output formatting remain in `SessionManager.FileDelivery`.
 
 ## Tests
 

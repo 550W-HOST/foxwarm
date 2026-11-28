@@ -189,9 +189,11 @@ public sealed class ImageCodecTests
     [Fact]
     public async Task HEIF_metadata_preflight_preserves_normal_input_and_falls_back_on_over_limit_primary_without_pixel_conversion()
     {
+        using var temp = new TempDirectory();
+        var blobs = new ImageBlobStore(temp.Path);
         var bytes = Heif("synthetic-3x2.heic");
         Assert.Equal((3, 2), HeifDecoder.Inspect(bytes));
-        Assert.False(ImageInputPolicy.IsOversized(bytes, "image/heic"));
+        Assert.False(await ImageInputPolicy.IsOversizedAsync(blobs.Decoder, bytes, "image/heic"));
         // Deliberately metadata-mutated container, not a claim of a genuine 8193x8193 HEVC image.
         // Source accepts this primary metadata without decoding its small coded plane.
         var declared = (byte[])bytes.Clone();
@@ -229,9 +231,7 @@ public sealed class ImageCodecTests
             }
         }
         Assert.Equal((8193, 8193), HeifDecoder.Inspect(declared));
-        Assert.True(ImageInputPolicy.IsOversized(declared, "image/heic"));
-        using var temp = new TempDirectory();
-        var blobs = new ImageBlobStore(temp.Path);
+        Assert.True(await ImageInputPolicy.IsOversizedAsync(blobs.Decoder, declared, "image/heic"));
         var reference = await blobs.PutAsync(declared, "image/heic", "metadata-only-heif");
         var original = new System.Text.Json.Nodes.JsonObject
         {

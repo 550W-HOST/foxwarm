@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace Foxwarm.Images;
 
-internal sealed class ImageInputException(string message, Exception? inner = null)
+internal class ImageInputException(string message, Exception? inner = null)
     : IOException(message, inner)
 {
     // A decoder rejected the supplied raster before any blob-store operation. Storage
@@ -47,6 +47,9 @@ internal static class HeifDecoder
     private delegate Error Primary(IntPtr context, out IntPtr handle);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void SetThreads(IntPtr context, int count);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int Dimension(IntPtr handle);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -76,6 +79,9 @@ internal static class HeifDecoder
             ReleaseImage,
             FreeOptions;
         internal readonly Limits SecurityLimits;
+#if FOXWARM_IMAGE_DECODER
+        internal readonly SetThreads SetMaxThreads;
+#endif
         internal readonly Read ReadMemory;
         internal readonly Primary GetPrimary;
         internal readonly Dimension Width,
@@ -112,6 +118,9 @@ internal static class HeifDecoder
                     );
                 Allocate = Load<Pointer>(heif, "heif_context_alloc");
                 Free = Load<Release>(heif, "heif_context_free");
+#if FOXWARM_IMAGE_DECODER
+                SetMaxThreads = Load<SetThreads>(heif, "heif_context_set_max_decoding_threads");
+#endif
                 SecurityLimits = Load<Limits>(heif, "heif_context_get_security_limits");
                 ReadMemory = Load<Read>(heif, "heif_context_read_from_memory_without_copy");
                 GetPrimary = Load<Primary>(heif, "heif_context_get_primary_image_handle");
@@ -173,6 +182,9 @@ internal static class HeifDecoder
         GCHandle pinned = default;
         try
         {
+#if FOXWARM_IMAGE_DECODER
+            api.SetMaxThreads(context, 0); // Decode tiles on the caller's thread.
+#endif
             var limits = api.SecurityLimits(context);
             if (limits == IntPtr.Zero || Marshal.ReadByte(limits) != 4)
                 throw new ImageInputException("HEIC native security-limit ABI is incompatible.");
@@ -202,6 +214,14 @@ internal static class HeifDecoder
             options = api.AllocateOptions();
             if (options == IntPtr.Zero || Marshal.ReadByte(options) < 4)
                 throw new ImageInputException("HEIC native decoding-options ABI is incompatible.");
+#if FOXWARM_IMAGE_DECODER
+            // Pinned x64 v8+ ABI. Zero selects the plugin's default (one pthread). A negative
+            // count passes through libheif to libde265, which leaves its thread pool stopped
+            // for counts <= 0. Worker confinement forbids creating any threads after admission.
+            if (Marshal.ReadByte(options) < 8)
+                throw new ImageInputException("HEIC native decoding-options ABI is incompatible.");
+            Marshal.WriteInt32(options, 108, -1);
+#endif
             decoderId = Marshal.StringToCoTaskMemUTF8("libde265");
             Marshal.WriteIntPtr(options, 48, decoderId); // v1.23.5 x64 decoder_id
             Check(

@@ -251,7 +251,8 @@ internal sealed partial class QQBotChannel
                             http,
                             () => RequireCurrent(expected),
                             token,
-                            partTimeout
+                            partTimeout,
+                            sessions.Images.Decoder
                         );
                         RequireCurrent(expected);
                         var body = new JsonObject
