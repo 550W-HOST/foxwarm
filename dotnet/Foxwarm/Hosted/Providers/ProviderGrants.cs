@@ -159,7 +159,7 @@ internal sealed class ProviderGrants(DeploymentConfiguration deployment, Action<
                     "NODE_PROVIDER_LIFECYCLE_LIMIT",
                     $"This tenant has reached its limit of {limit} Node lifecycle actions per hour on Provider '{id}'. Try again later."
                 );
-            recent.Add(now);
+            recent.Add(JsonValue.Create(now));
             history[id] = recent;
             return await tx.ExecuteAsync(
                 "UPDATE state_documents SET text=$2,generation=generation+1,updated_at=now() WHERE name=$1",

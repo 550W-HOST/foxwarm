@@ -244,11 +244,19 @@ internal sealed partial class SessionManager
             }
             throw new InvalidOperationException("Unable to allocate a guest Agent.");
         }
-        var result = await ResolveChannelAsync(
-            source.Target,
-            Create,
-            new JsonObject { ["dangerouslyAllowAllUsers"] = true }
-        );
+        SessionOwner result;
+        try
+        {
+            result = await ResolveChannelAsync(
+                source.Target, Create, new JsonObject { ["dangerouslyAllowAllUsers"] = true }
+            );
+        }
+        catch (GuestPolicyDenied denial)
+        {
+            // InvalidDataException is sealed. Preserve the provisioning contract while
+            // letting the poller distinguish a policy refusal from a failed storage read.
+            throw new InvalidDataException(denial.Message, denial);
+        }
         return SessionCatalog.Flag(ChannelBinding(source.Target)?["dangerouslyAllowAllUsers"])
             ? result
             : null;
