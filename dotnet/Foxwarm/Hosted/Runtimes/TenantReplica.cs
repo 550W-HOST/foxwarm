@@ -466,17 +466,17 @@ internal sealed class TenantReplica
             return;
         await using var connection = await app.OpenAsync(CancellationToken.None).ConfigureAwait(false);
         await using var command = new Npgsql.NpgsqlCommand(
-            "SELECT tenant_id, profile, pinned_role, settings_revision, credential_version FROM tenants WHERE tenant_id = ANY($1)",
+            "SELECT tenant_id, profile, pinned_role, settings_revision, credential_version, state FROM tenants WHERE tenant_id = ANY($1)",
             connection
         );
         command.Parameters.Add(new Npgsql.NpgsqlParameter<int[]> { TypedValue = [.. held.Select(grant => grant.TenantId).Distinct()] });
-        Dictionary<int, (TenantProfile Profile, string? Pinned, long Revision, long Credential)> placement = [];
+        Dictionary<int, (TenantProfile Profile, string? Pinned, long Revision, long Credential, string State)> placement = [];
         await using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
             while (await reader.ReadAsync().ConfigureAwait(false))
-                placement[reader.GetInt32(0)] = (TenantProfiles.Parse(reader.GetString(1)), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetInt64(3), reader.GetInt64(4));
+                placement[reader.GetInt32(0)] = (TenantProfiles.Parse(reader.GetString(1)), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetInt64(3), reader.GetInt64(4), reader.GetString(5));
         foreach (var grant in held)
             if (placement.TryGetValue(grant.TenantId, out var now)
-                && (now.Revision != grant.SettingsRevision || now.Profile != grant.Profile || !ReplicaRoles.MayServe(options.Role, now.Profile, now.Pinned)))
+                && (now.State != "active" || now.Revision != grant.SettingsRevision || now.Profile != grant.Profile || !ReplicaRoles.MayServe(options.Role, now.Profile, now.Pinned)))
                 coordinator.SettingsChanged(grant, now.Credential != grant.CredentialVersion);
     }
 

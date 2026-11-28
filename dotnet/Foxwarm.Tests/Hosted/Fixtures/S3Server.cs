@@ -19,7 +19,8 @@ internal sealed class S3Server
     internal const string UrlVariable = "FOXWARM_TEST_S3_URL";
     internal const string Region = "us-east-1";
 
-    private static readonly Lazy<Task<S3Server>> shared = new(StartAsync);
+    private static readonly Lazy<Task<S3Server>> shared = new(() => StartAsync(false));
+    private static readonly Lazy<Task<S3Server>> versioned = new(() => StartAsync(true));
     private static int bucketCounter;
 
     private S3Server(Uri endpoint, string accessKey, string secretKey)
@@ -39,9 +40,9 @@ internal sealed class S3Server
 
     internal string SecretKey { get; }
 
-    internal static Task<S3Server> SharedAsync() =>
+    internal static Task<S3Server> SharedAsync(bool enableVersioning = false) =>
         Configured
-            ? shared.Value
+            ? (enableVersioning ? versioned : shared).Value
             : throw new InvalidOperationException(
                 $"Hosted blob tests need an S3 server: set {ExecutableVariable} to a VersityGW executable or {UrlVariable} to an endpoint."
             );
@@ -50,7 +51,7 @@ internal sealed class S3Server
     internal static string NewBucketName() =>
         $"fw-test-{Environment.ProcessId}-{Interlocked.Increment(ref bucketCounter)}-{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(3))}";
 
-    private static async Task<S3Server> StartAsync()
+    private static async Task<S3Server> StartAsync(bool enableVersioning)
     {
         var url = Environment.GetEnvironmentVariable(UrlVariable);
         if (!string.IsNullOrEmpty(url))
@@ -74,8 +75,16 @@ internal sealed class S3Server
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        foreach (var argument in new[] { "--port", $"127.0.0.1:{port}", "--region", Region, "posix", data })
+        foreach (var argument in new[] { "--port", $"127.0.0.1:{port}", "--region", Region, "posix" })
             start.ArgumentList.Add(argument);
+        if (enableVersioning)
+        {
+            var versions = Path.Combine(root, "versions");
+            Directory.CreateDirectory(versions);
+            start.ArgumentList.Add("--versioning-dir");
+            start.ArgumentList.Add(versions);
+        }
+        start.ArgumentList.Add(data);
         // Credentials through the environment keep them out of the process list.
         start.Environment["ROOT_ACCESS_KEY_ID"] = accessKey;
         start.Environment["ROOT_SECRET_ACCESS_KEY"] = secretKey;

@@ -236,6 +236,25 @@ public sealed class OperatorProcessTests
                 var reply = await Redeem(nextSetup);
                 return reply.Status == HttpStatusCode.Unauthorized && (string?)reply.Json["code"] == "setup_expired";
             });
+            // A previously resolved hostname is sent straight to its old owner. Suspension
+            // must stop its generation even with a warm hostname cache. Resumption serves
+            // through a newly acquired epoch; deletion permanently fences the old one.
+            Assert.Equal(HttpStatusCode.Conflict, (await Call(HttpMethod.Delete, "/tenants/alpha")).Status);
+            var previousEpoch = await harness.EpochAsync("alpha");
+            var suspended = JsonNode.Parse(await Cli("--url", origin, "--token-file", tokenFile, "tenant", "suspend", "alpha"))!;
+            Assert.Equal("suspended", (string?)suspended["state"]);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, (await AsAdmin(reusable, "/health")).Status);
+            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Post, "/tenants/alpha/suspend")).Status);
+            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Post, "/tenants/alpha/resume")).Status);
+            await Until(async () =>
+            {
+                var served = await Redeem(nextSetup);
+                return served.Status == HttpStatusCode.Unauthorized && (string?)served.Json["code"] == "setup_expired" && await harness.EpochAsync("alpha") > previousEpoch;
+            });
+            Assert.Equal(HttpStatusCode.OK, (await Call(HttpMethod.Post, "/tenants/alpha/suspend")).Status);
+            Assert.Equal(HttpStatusCode.Accepted, (await Call(HttpMethod.Delete, "/tenants/alpha")).Status);
+            await Until(async () => (await Call(HttpMethod.Get, "/tenants/alpha")).Status == HttpStatusCode.NotFound);
+            Assert.Equal(HttpStatusCode.NotFound, (await AsAdmin(reusable, "/health")).Status);
         }
         finally
         {

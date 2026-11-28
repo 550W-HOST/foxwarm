@@ -508,7 +508,7 @@ internal sealed class TenantLease
                 + " FROM tenants t"
                 + " WHERE l.tenant_id = $1 AND l.owner_replica = $2 AND l.epoch = $3"
                 + " AND l.state = 'active' AND l.expires_at > now() AND t.tenant_id = l.tenant_id"
-                + " AND " + PlacementHolds("t", "$5", "$6"),
+                + " AND ($6 IS NULL OR t.state='active') AND " + PlacementHolds("t", "$5", "$6"),
             connection
         );
         command.Parameters.Add(new NpgsqlParameter<int> { TypedValue = grant.TenantId });

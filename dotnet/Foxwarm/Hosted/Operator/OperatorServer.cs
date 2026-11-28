@@ -71,7 +71,7 @@ internal static class OperatorServer
             listener.CheckSingleTenant(bootstrap.Tenant);
         await using var database = new PgDatabase(bootstrap.RequireDatabaseUrl(), "foxwarm-operator");
         await SchemaMigrator.RequireCompatibleAsync(database, token: token);
-        var store = new OperatorStore(database, bootstrap.RequireKeks().Current);
+        var store = new OperatorStore(database, bootstrap.RequireKeks().Current, listener.Deployment.Blobs.S3);
         await store.CheckRoleAsync(token);
         await store.RequireOperatorHostnameAsync(listener.Host, token);
         var builder = WebApplication.CreateSlimBuilder();
@@ -84,7 +84,10 @@ internal static class OperatorServer
         });
         await using var app = builder.Build();
         app.Run(context => Dispatch(context, store, listener));
-        await app.RunAsync(token);
+        await app.StartAsync(token);
+        var cleanup = store.RunDeletionLoopAsync(app.Lifetime.ApplicationStopping);
+        try { await app.WaitForShutdownAsync(token); }
+        finally { await cleanup; }
     }
 
     internal static async Task Dispatch(HttpContext context, OperatorStore store, OperatorListener listener)
@@ -102,7 +105,7 @@ internal static class OperatorServer
         }
         var segments = (remaining.Value ?? "").Trim('/').Split('/');
         if ((request.Method, segments) is not ("GET", ["placement"] or ["tenants"] or ["tenants", _] or ["profiles", _, "ceiling"])
-            and not ("POST", ["tenants"] or ["tenants", _, "rotate"]) and not ("PATCH", ["tenants", _]) and not ("PUT", ["profiles", _, "ceiling"]))
+            and not ("POST", ["tenants"] or ["tenants", _, "rotate" or "suspend" or "resume"]) and not ("DELETE", ["tenants", _]) and not ("PATCH", ["tenants", _]) and not ("PUT", ["profiles", _, "ceiling"]))
         {
             response.StatusCode = 404;
             return;
@@ -124,6 +127,12 @@ internal static class OperatorServer
                 case ("GET", ["placement"]): result = await store.PlacementAsync(ct); break;
                 case ("GET", ["tenants"]): result = await store.ReadAsync(null, ct); break;
                 case ("GET", ["tenants", var slug]): result = await store.ReadAsync(slug, ct); break;
+                case ("DELETE", ["tenants", var slug]):
+                    result = await store.DeleteAsync(slug, ct);
+                    response.StatusCode = StatusCodes.Status202Accepted;
+                    break;
+                case ("POST", ["tenants", var slug, "suspend"]): result = await store.SuspendAsync(slug, ct); break;
+                case ("POST", ["tenants", var slug, "resume"]): result = await store.ResumeAsync(slug, ct); break;
                 case ("POST", ["tenants", var slug, "rotate"]): result = await store.RotateAsync(slug, ct); break;
                 case ("POST", ["tenants"]):
                     var create = await Body(request, ct);

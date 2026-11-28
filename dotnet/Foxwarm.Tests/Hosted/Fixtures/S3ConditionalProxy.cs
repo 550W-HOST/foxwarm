@@ -23,6 +23,7 @@ internal sealed class S3ConditionalProxy : IAsyncDisposable
         Ignore,
         Reject,
         Reset,
+        Delay,
     }
 
     private static readonly HashSet<string> HopHeaders = new(StringComparer.OrdinalIgnoreCase)
@@ -49,6 +50,9 @@ internal sealed class S3ConditionalProxy : IAsyncDisposable
     }
 
     internal Uri Endpoint { get; private set; } = null!;
+
+    internal TaskCompletionSource PutArrived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource ReleasePut { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal int ConditionalPuts => Volatile.Read(ref conditionalPuts);
 
@@ -86,6 +90,11 @@ internal sealed class S3ConditionalProxy : IAsyncDisposable
             );
             return;
         }
+        if (conditional && mode == ConditionalMode.Delay)
+        {
+            PutArrived.TrySetResult();
+            await ReleasePut.Task.WaitAsync(context.RequestAborted);
+        }
         var raw = context.Features.Get<IHttpRequestFeature>()!.RawTarget;
         using var forward = new HttpRequestMessage(new HttpMethod(request.Method), new Uri(target, raw));
         // The client signed the host it addressed; keep it.
@@ -109,7 +118,7 @@ internal sealed class S3ConditionalProxy : IAsyncDisposable
             HttpCompletionOption.ResponseHeadersRead,
             context.RequestAborted
         );
-        if (conditional && response.StatusCode == HttpStatusCode.PreconditionFailed)
+        if (conditional && mode == ConditionalMode.Ignore && response.StatusCode == HttpStatusCode.PreconditionFailed)
         {
             // An endpoint that ignores the header accepts the write.
             context.Response.StatusCode = (int)HttpStatusCode.OK;

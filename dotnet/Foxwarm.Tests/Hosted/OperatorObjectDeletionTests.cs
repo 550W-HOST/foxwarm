@@ -1,0 +1,202 @@
+using Amazon.S3;
+using Amazon.S3.Model;
+using Foxwarm.Hosted.Blobs;
+using Foxwarm.Hosted.Operator;
+using Foxwarm.Hosted.Postgres;
+using Foxwarm.Secrets;
+using Xunit;
+
+namespace Foxwarm.Tests.Hosted;
+
+[Trait("Backend", "postgres")]
+[Trait("Backend", "s3")]
+public sealed class OperatorObjectDeletionTests
+{
+    private static async Task Until(Func<Task<bool>> check)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        while (!await check())
+            await Task.Delay(100, timeout.Token);
+    }
+
+    [Theory]
+    [InlineData("off")]
+    [InlineData("suspended")]
+    [InlineData("locked")]
+    public async Task Physical_erasure_rechecks_the_prefix_after_a_late_put(string mode)
+    {
+        var server = await S3Server.SharedAsync(enableVersioning: true);
+        await using var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
+        using var root = new TempDirectory();
+        var settings = new S3BlobSettings(
+            server.Endpoint,
+            S3Server.Region,
+            S3Server.NewBucketName(),
+            true,
+            Path.Combine(root.Path, "access"),
+            Path.Combine(root.Path, "secret")
+        );
+        await File.WriteAllTextAsync(settings.AccessKeyIdFile, server.AccessKey);
+        await File.WriteAllTextAsync(settings.SecretAccessKeyFile, server.SecretKey);
+        using var s3 = S3Blobs.Client(settings, server.AccessKey, server.SecretKey);
+        var bucket = settings.Bucket;
+        await s3.PutBucketAsync(
+            new PutBucketRequest
+            {
+                BucketName = bucket,
+                ObjectLockEnabledForBucket = mode == "locked" ? true : null,
+            }
+        );
+        await using var op = new PgDatabase(
+            db.OperatorConnectionString,
+            "operator-object-deletion"
+        );
+        var store = new OperatorStore(
+            op,
+            KeyEncryptionKey.From(InstanceKeys.OpenOrCreate(Path.Combine(root.Path, "kek"))),
+            settings
+        );
+        await store.CreateAsync("alpha", "hosted", "alpha.test", default);
+        var id = await db.TenantIdAsync("alpha");
+        var identity = (string)
+            (await db.ScalarAsync("SELECT object_identity FROM tenants WHERE tenant_id=$1", id))!;
+        var prefix = S3Blobs.TenantRoot(identity);
+        async Task SetMode(VersionStatus status) =>
+            await s3.PutBucketVersioningAsync(
+                new PutBucketVersioningRequest
+                {
+                    BucketName = bucket,
+                    VersioningConfig = new S3BucketVersioningConfig { Status = status },
+                }
+            );
+        if (mode == "suspended")
+            await SetMode(VersionStatus.Enabled);
+        var existing = prefix + "artifacts/existing";
+        await s3.PutObjectAsync(
+            new PutObjectRequest
+            {
+                BucketName = bucket,
+                Key = existing,
+                ContentBody = "data",
+            }
+        );
+        if (mode != "off")
+        {
+            await s3.PutObjectAsync(
+                new PutObjectRequest
+                {
+                    BucketName = bucket,
+                    Key = existing,
+                    ContentBody = "replacement",
+                }
+            );
+            await s3.DeleteObjectAsync(bucket, existing);
+        }
+        if (mode == "suspended")
+            await SetMode(VersionStatus.Suspended);
+        await using var proxy = await S3ConditionalProxy.StartAsync(
+            server.Endpoint,
+            S3ConditionalProxy.ConditionalMode.Delay
+        );
+        using var replica = S3Blobs.Client(
+            settings with
+            {
+                Endpoint = proxy.Endpoint,
+            },
+            server.AccessKey,
+            server.SecretKey
+        );
+        var lateKey = prefix + "artifacts/late";
+        var put = replica.PutObjectAsync(
+            new PutObjectRequest
+            {
+                BucketName = bucket,
+                Key = lateKey,
+                ContentBody = "late",
+                IfNoneMatch = "*",
+                ObjectLockLegalHoldStatus = mode == "locked" ? ObjectLockLegalHoldStatus.On : null,
+            }
+        );
+        await proxy.PutArrived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await store.SuspendAsync("alpha", default);
+        await store.DeleteAsync("alpha", default);
+        using var stop = new CancellationTokenSource();
+        var worker = store.RunDeletionLoopAsync(stop.Token);
+        try
+        {
+            await Until(async () =>
+                await db.ScalarAsync(
+                    "SELECT settle_after IS NOT NULL FROM operator_deletions WHERE tenant_id=$1",
+                    id
+                )
+                    is true
+            );
+            proxy.ReleasePut.TrySetResult();
+            var late = await put;
+            Assert.True((bool)(await store.ReadAsync("alpha", default))["objectsPending"]!);
+            Assert.Equal(
+                1L,
+                await db.ScalarAsync("SELECT count(*) FROM tenant_keys WHERE tenant_id=$1", id)
+            );
+            // Move just the persisted settle deadline. The second proof must still come from
+            // a fresh version-aware listing; the wall clock isn't otherwise mocked.
+            await db.ExecuteOwnerAsync(
+                "UPDATE operator_deletions SET settle_after=clock_timestamp()-interval '1 second'"
+            );
+            if (mode == "locked")
+            {
+                // A genuine protected version refuses an ordinary delete even to the bucket owner.
+                var response = await Assert.ThrowsAsync<AmazonS3Exception>(() =>
+                    s3.DeleteObjectAsync(bucket, lateKey, late.VersionId)
+                );
+                Assert.Equal(System.Net.HttpStatusCode.Forbidden, response.StatusCode);
+                await Task.Delay(TimeSpan.FromSeconds(2));
+                Assert.True((bool)(await store.ReadAsync("alpha", default))["objectsPending"]!);
+                await s3.PutObjectLegalHoldAsync(
+                    new PutObjectLegalHoldRequest
+                    {
+                        BucketName = bucket,
+                        Key = lateKey,
+                        VersionId = late.VersionId,
+                        LegalHold = new ObjectLockLegalHold
+                        {
+                            Status = ObjectLockLegalHoldStatus.Off,
+                        },
+                    }
+                );
+            }
+            await Until(async () =>
+                await db.ScalarAsync("SELECT 1 FROM tenants WHERE tenant_id=$1", id) is null
+            );
+            if (mode != "off")
+                Assert.Empty(
+                    (
+                        await s3.ListVersionsAsync(
+                            new ListVersionsRequest { BucketName = bucket, Prefix = prefix }
+                        )
+                    ).Versions
+                        ?? []
+                );
+            Assert.Empty(
+                (
+                    await s3.ListObjectsV2Async(
+                        new ListObjectsV2Request { BucketName = bucket, Prefix = prefix }
+                    )
+                ).S3Objects
+                    ?? []
+            );
+            await store.CreateAsync("alpha", "hosted", "alpha.test", default);
+            Assert.NotEqual(
+                identity,
+                await db.ScalarAsync("SELECT object_identity FROM tenants WHERE name='alpha'")
+            );
+            await s3.DeleteBucketAsync(bucket);
+        }
+        finally
+        {
+            proxy.ReleasePut.TrySetResult();
+            stop.Cancel();
+            await worker;
+        }
+    }
+}
