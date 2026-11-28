@@ -11,7 +11,7 @@ namespace Foxwarm.Tests.Hosted;
 // replica calls it with an activation's grant.
 [Trait("Backend", "postgres")]
 [Collection("Process console")]
-public sealed class TenantRuntimeConstructionTests
+public sealed partial class TenantRuntimeConstructionTests
 {
     private sealed class Harness : IAsyncDisposable
     {
@@ -137,14 +137,16 @@ public sealed class TenantRuntimeConstructionTests
         await using (var runtime = await harness.BuildAsync("alpha", lease, deployment, TenantProfile.Operator))
         {
             var capabilities = ((MainHostRuntime)runtime).Host.Sessions.Capabilities;
-            Assert.Equal(RuntimeCapabilities.Operator with { Egress = capabilities.Egress }, capabilities);
+            Assert.Equal(RuntimeCapabilities.Operator with { Egress = capabilities.Egress, Providers = capabilities.Providers }, capabilities);
+            Assert.Empty(capabilities.Providers!.Drivers);
             Assert.Equal(Foxwarm.Net.EgressProfile.Operator, capabilities.Egress.Profile);
         }
         Assert.Equal("hosted", await harness.Database.ScalarAsync("SELECT profile FROM tenants WHERE name = 'alpha'"));
         await using (var runtime = await harness.BuildAsync("alpha", lease, deployment, TenantProfile.Hosted))
         {
             var capabilities = ((MainHostRuntime)runtime).Host.Sessions.Capabilities;
-            Assert.Equal(RuntimeCapabilities.Hosted with { Egress = capabilities.Egress }, capabilities);
+            Assert.Equal(RuntimeCapabilities.Hosted with { Egress = capabilities.Egress, Providers = capabilities.Providers }, capabilities);
+            Assert.Empty(capabilities.Providers!.Drivers);
             Assert.Equal(Foxwarm.Net.EgressProfile.Hosted, capabilities.Egress.Profile);
         }
     }
