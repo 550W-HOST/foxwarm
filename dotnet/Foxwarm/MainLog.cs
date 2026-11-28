@@ -165,6 +165,14 @@ internal sealed class MainLog : IDisposable
     /// </summary>
     internal void UseFor() => current.Value = this;
 
+    // A hosted driver's lifetime belongs to this generation, not to its calling flow.
+    internal void WriteErrorLine(string line)
+    {
+        lock (capture.Gate)
+            if (!disposed)
+                capture.Record(RedactOwn(line), isError: true, this);
+    }
+
     /// <summary>
     /// Makes the current logical flow the process's own: its lines go to the process's sink (the
     /// oldest open sink with no tenant), not to a tenant's.

@@ -377,7 +377,7 @@ internal static class HostedEntry
                 jsonStdoutLog: true,
                 logTenant: bootstrap.Tenant,
                 schedule: schedule,
-                openProviders: () => new Providers.ProviderGrants(deployment)
+                openProviders: diagnostic => new Providers.ProviderGrants(deployment, diagnostic)
                     .LoadAsync(tenant.Database, bootstrap.Tenant, profile, token, applyGrants: server is not null)
             )
             .ConfigureAwait(false);

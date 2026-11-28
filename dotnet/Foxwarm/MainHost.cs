@@ -102,7 +102,7 @@ internal sealed class MainHost : IAsyncDisposable
         // Hosted mode: the tenant this runtime's log lines carry.
         string? logTenant = null,
         Foxwarm.Timers.RuntimeSchedule? schedule = null,
-        Func<Task<Nodes.TenantProviders>>? openProviders = null
+        Func<Action<string>, Task<Nodes.TenantProviders>>? openProviders = null
     ) =>
         CreateAsync(
             args,
@@ -138,7 +138,7 @@ internal sealed class MainHost : IAsyncDisposable
         bool jsonStdoutLog = false,
         string? logTenant = null,
         Foxwarm.Timers.RuntimeSchedule? schedule = null,
-        Func<Task<Nodes.TenantProviders>>? openProviders = null
+        Func<Action<string>, Task<Nodes.TenantProviders>>? openProviders = null
     )
     {
         capabilities ??= RuntimeCapabilities.File;
@@ -165,7 +165,7 @@ internal sealed class MainHost : IAsyncDisposable
                 // Driver qualification starts subprocesses. Their first stderr line needs the
                 // same tenant capture and secret matcher as subsequent driver calls.
                 _ = configuration.Secrets.Redactor;
-                capabilities = capabilities with { Providers = await openProviders() };
+                capabilities = capabilities with { Providers = await openProviders(log is not null ? log.WriteErrorLine : Console.Error.WriteLine) };
             }
             sessions = new SessionManager(
                 dataRoot,

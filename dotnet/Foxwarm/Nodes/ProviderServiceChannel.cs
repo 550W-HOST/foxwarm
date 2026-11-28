@@ -229,14 +229,44 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
 
     private async Task DrainAsync(Stream stream)
     {
-        var buffer = new byte[8192];
         try
         {
-            int read;
-            while ((read = await stream.ReadAsync(buffer)) > 0)
-                if (provider.Stderr is { } log)
-                    foreach (var line in Encoding.UTF8.GetString(buffer, 0, read).Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                        log(line.TrimEnd('\r'));
+            if (provider.Stderr is not { } log)
+            {
+                await stream.CopyToAsync(Stream.Null);
+                return;
+            }
+            const int limit = 64 * 1024;
+            var buffer = new byte[8192];
+            var line = new byte[limit];
+            int used = 0;
+            bool truncated = false;
+            void Emit(bool cut)
+            {
+                var text = Encoding.UTF8.GetString(line, 0, used).TrimEnd('\r');
+                if (text.Length != 0) log(cut ? text + " [truncated]" : text);
+            }
+            int count;
+            while ((count = await stream.ReadAsync(buffer)) != 0)
+                for (int i = 0; i < count; i++)
+                {
+                    if (buffer[i] == '\n')
+                    {
+                        if (!truncated) Emit(false);
+                        truncated = false;
+                        used = 0;
+                    }
+                    else if (!truncated)
+                    {
+                        if (used < limit) line[used++] = buffer[i];
+                        else
+                        {
+                            Emit(true);
+                            truncated = true; // Drain the rest without making more records.
+                        }
+                    }
+                }
+            if (!truncated && used > 0) Emit(false);
         }
         catch (Exception error) when (error is IOException or ObjectDisposedException) { }
     }

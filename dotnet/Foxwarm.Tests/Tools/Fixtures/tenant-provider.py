@@ -25,6 +25,10 @@ def node(name):
                 exec=True, services={'vscode-fs': 1})
 
 record(request)
+notes = root / ('stderr-' + str(tenant) + '-' + operation)
+if notes.exists():
+    sys.stderr.buffer.write(notes.read_bytes())
+    sys.stderr.buffer.flush()
 identity = {key: request[key] for key in ('protocol', 'requestId', 'providerId', 'operation')}
 if tenant is not None:
     identity['tenantId'] = tenant + 1 if (root / ('mismatch-' + operation)).exists() else tenant

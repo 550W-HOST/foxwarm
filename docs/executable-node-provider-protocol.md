@@ -286,7 +286,7 @@ A provider need not implement the services itself. The CLI Node binary can serve
 
 ### Limits
 
-Each frame in either direction is limited to 72 MiB (a 50 MiB file is about 67 MiB as base64 plus its envelope). An oversize or unterminated frame ends the channel. Core drains the Provider's stderr continuously; a hosted replica tags each diagnostic with its tenant and Provider, and file mode discards it; the one-shot stderr limit does not apply to a channel, and diagnostics are never returned to callers. The eight active one-shot requests per provider do not count channel requests.
+Each frame in either direction is limited to 72 MiB (a 50 MiB file is about 67 MiB as base64 plus its envelope). An oversize or unterminated frame ends the channel. Core drains the Provider's stderr continuously; a hosted replica records each logical line in its owning tenant’s masked log, tagged with its Provider. Lines over 64 KiB are truncated with a marker; file mode discards stderr; the one-shot stderr limit does not apply to a channel, and diagnostics are never returned to callers. The eight active one-shot requests per provider do not count channel requests.
 
 ### Lifecycle
 
