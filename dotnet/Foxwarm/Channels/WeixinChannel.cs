@@ -141,6 +141,7 @@ internal sealed class WeixinChannel : IManagedChannel
                         await cursors.SaveAsync(id, account, new JsonObject { ["get_updates_buf"] = next });
                     cursor = next;
                 }
+                health.Recover("Weixin input");
             }
             catch (Exception error)
             {
@@ -154,8 +155,10 @@ internal sealed class WeixinChannel : IManagedChannel
                     health.Fail(PollingPath, error);
                 else if (ChannelFailure.Refused(error))
                     health.Fail(SendingPath, error);
-                else
+                else if (error is HttpRequestException or WeixinHttpException)
                     health.Log(error);
+                else
+                    health.InputPaused("Weixin", error);
                 // A refused poll endpoint stays refused: polling ends until reconfiguration.
                 if (!polled && ChannelFailure.Refused(error))
                     return;

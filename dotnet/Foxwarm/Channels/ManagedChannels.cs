@@ -568,10 +568,12 @@ internal sealed class ManagedChannels(
 
     private void FailRuntime(string id, ChannelHealth health, string path, Exception error)
     {
-        var text =
-            error is ChannelFailure
-                ? ChannelFailure.Describe(error)
-                : ChannelFailure.Sentence(path, error);
+        var text = error switch
+        {
+            ChannelFailure => ChannelFailure.Describe(error),
+            ChannelInputPaused => error.Message,
+            _ => ChannelFailure.Sentence(path, error),
+        };
         lock (gate)
         {
             if (!reporting.TryGetValue(id, out var current) || current != health)

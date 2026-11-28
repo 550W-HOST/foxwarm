@@ -3,7 +3,12 @@ using System.Runtime.InteropServices;
 namespace Foxwarm.Images;
 
 internal sealed class ImageInputException(string message, Exception? inner = null)
-    : IOException(message, inner);
+    : IOException(message, inner)
+{
+    // A decoder rejected the supplied raster before any blob-store operation. Storage
+    // integrity and native-library failures must remain distinguishable to ingress.
+    internal bool InvalidRaster { get; init; }
+}
 
 // Optional, lazy Linux prerequisite. Raster images never load this decoder.
 internal static class HeifDecoder

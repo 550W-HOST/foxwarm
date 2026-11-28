@@ -5,6 +5,8 @@ namespace Foxwarm.Channels;
 
 internal sealed partial class MatrixChannel
 {
+    private readonly PolledMedia mediaAttempts = new();
+
     private async Task PollAsync(bool threadNotifications)
     {
         try
@@ -101,7 +103,11 @@ internal sealed partial class MatrixChannel
                         )
                         {
                             await ProcessRoomStateAsync(room, new JsonArray(item.DeepClone()));
-                            await ProcessTimelineAsync(room, item);
+                            try { await ProcessTimelineAsync(room, item); }
+                            catch (Exception error) when (PolledMedia.Rejected(error))
+                            {
+                                health.Log(error.InnerException ?? error);
+                            }
                         }
                     }
                     if (cursors is not null && next is not null)
@@ -110,13 +116,16 @@ internal sealed partial class MatrixChannel
                         await cursors.SaveAsync(id, Account, new JsonObject { ["next_batch"] = next, ["encryptedRooms"] = rooms });
                     }
                     cursor = next;
+                    mediaAttempts.Checkpointed();
+                    health.Recover("Matrix input");
                 }
                 catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
                 catch (Exception error)
                 {
                     // Retain since on failed Session admission or checkpoint. Prior messages
                     // are recognized by their durable receipts if this batch is read again.
-                    health.Log(error);
+                    if (error is ChannelMediaFetchFailure fetch) health.Log(fetch.InnerException!);
+                    else health.InputPaused("Matrix", error);
                     await delay(TimeSpan.FromSeconds(2), stopping.Token);
                 }
             }
@@ -281,35 +290,22 @@ internal sealed partial class MatrixChannel
                     return;
                 }
                 // Source fetches eagerly before Router authorization and does not attach the access token.
-                try
+                var downloadStop = cursors?.Closing ?? default;
+                async Task<byte[]> Download()
                 {
-                    using var response = await http.GetAsync(media, HttpCompletionOption.ResponseHeadersRead, cursors?.Closing ?? default);
+                    using var response = await http.GetAsync(media, HttpCompletionOption.ResponseHeadersRead, downloadStop);
                     response.EnsureSuccessStatusCode();
-                    var name = !image ? SessionWait.Text(content["filename"]) : null;
-                    if (string.IsNullOrEmpty(name))
-                        name = SessionWait.Text(content["body"]);
-                    if (string.IsNullOrEmpty(name))
-                        name = image ? "matrix-image" : "matrix-file";
-                    var mime = SessionWait.Text(content["info"]?["mimetype"]);
-                    if (string.IsNullOrEmpty(mime))
-                        mime = image ? "image/jpeg" : "application/octet-stream";
-                    message = await sessions.ReceiveRemoteChannelFileAsync(
-                        "matrix",
-                        room,
-                        () => sessions.ReadChannelBodyAsync(response.Content, cursors?.Closing ?? default),
-                        name,
-                        mime,
-                        "",
-                        CancellationToken.None,
-                        image
-                    );
+                    return await sessions.ReadChannelBodyAsync(response.Content, downloadStop);
                 }
-                catch (Exception error) when (ChannelFailure.RejectedMedia(error))
-                {
-                    health.Log(error);
-                    Remember();
-                    return;
-                }
+                var name = !image ? SessionWait.Text(content["filename"]) : null;
+                if (string.IsNullOrEmpty(name)) name = SessionWait.Text(content["body"]);
+                if (string.IsNullOrEmpty(name)) name = image ? "matrix-image" : "matrix-file";
+                var mime = SessionWait.Text(content["info"]?["mimetype"]);
+                if (string.IsNullOrEmpty(mime)) mime = image ? "image/jpeg" : "application/octet-stream";
+                message = await sessions.ReceiveRemoteChannelFileAsync(
+                    "matrix", room, () => mediaAttempts.FetchAsync(eventId.Length > 0 ? eventId : media.AbsoluteUri, Download, downloadStop),
+                    name, mime, "", CancellationToken.None, image
+                );
                 break;
             default:
                 Remember();

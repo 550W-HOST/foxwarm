@@ -23,6 +23,11 @@ internal sealed class ChannelHealth(
             fail(path, error);
     }
 
+    // The operator sees an input pause independently of a successful HTTP poll. The inner
+    // error remains available to diagnostic logging; it does not enter the status text.
+    internal void InputPaused(string platform, Exception error) =>
+        Fail(platform + " input", new ChannelInputPaused(platform, error));
+
     internal void Recover(string path) => recover?.Invoke(path);
 
     // Runs a send: success clears the path's problem, a channel-level failure records it.
@@ -40,3 +45,6 @@ internal sealed class ChannelHealth(
         Recover(path);
     }
 }
+
+internal sealed class ChannelInputPaused(string platform, Exception cause)
+    : IOException(platform + " input is paused: an incoming message couldn't be saved. Retrying.", cause);
