@@ -91,9 +91,10 @@ internal sealed class ManagedChannels(
     internal bool ConfiguredPoller => configuration.CurrentChannels().Any(entry =>
         entry.Value is JsonObject settings && Eligible(entry.Key, settings) && Type(entry.Key, settings) is "telegram" or "matrix" or "weixin");
 
-    internal JsonArray Statuses(bool webUiRunning = false)
+    internal JsonArray Statuses(bool webUiRunning = false) => Statuses(configuration.CurrentChannels(), webUiRunning);
+
+    internal JsonArray Statuses(JsonObject entries, bool webUiRunning)
     {
-        var entries = configuration.CurrentChannels();
         var ids = entries
             .Select(pair => pair.Key)
             .Concat(sessions.ChannelRegistry.Ids())

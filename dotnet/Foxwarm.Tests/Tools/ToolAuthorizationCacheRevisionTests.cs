@@ -79,6 +79,34 @@ public sealed class ToolAuthorizationCacheRevisionTests
         }
     }
 
+    private sealed class PendingCeiling : IOperatorCeilingSource
+    {
+        internal readonly TaskCompletionSource<OperatorCeilingDocument?> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal int Reads;
+        public OperatorCeilingDocument? Read() => throw new InvalidOperationException("Synchronous ceiling read.");
+        public Task<OperatorCeilingDocument?> ReadAsync(CancellationToken token)
+        {
+            Interlocked.Increment(ref Reads);
+            return Result.Task.WaitAsync(token);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentReadersShareTheRevisionButCancelTheirOwnWait()
+    {
+        using var temp = new TempDirectory();
+        var source = new PendingCeiling();
+        var authority = new ToolAuthorizationAuthority(new FileConfigDocuments(temp.Path)) { CeilingSource = source };
+        using var stop = new CancellationTokenSource();
+        var first = authority.LoadCeilingAsync(stop.Token);
+        var next = authority.LoadCeilingAsync();
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        source.Result.SetResult(new("global", Ceiling));
+        Assert.Equal("no-exec", FirstRule((await next)!));
+        Assert.Equal(1, source.Reads);
+    }
+
     private static byte[] Policy(string id) =>
         Encoding.UTF8.GetBytes(
             $"version: 1\ndefaultAction: allow\nrules:\n  - id: {id}\n    tool: {{source: node, name: exec}}\n    action: deny\n"

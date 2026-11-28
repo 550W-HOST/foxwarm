@@ -248,31 +248,71 @@ internal sealed class ToolAuthorizationAuthority
         }
     }
 
-    private async Task<T> ReadFreshAsync<T>(Func<T> read, Action<T> store, CancellationToken cancellationToken)
+    // A new revision has its own in-flight reads: a stalled previous one cannot
+    // block the replacement. Individual callers cancel their wait, not their neighbours'.
+    private sealed class RevisionRead<T>
     {
-        var failed = false;
+        internal long Revision;
+        internal TaskCompletionSource<T>? Pending;
+    }
+    private readonly RevisionRead<ToolAuthorizationPolicy> policyRead = new();
+    private readonly RevisionRead<ToolAuthorizationPolicy?> ceilingLoad = new();
+
+    private async Task<T> ReadSharedAsync<T>(RevisionRead<T> state, Func<(bool, T)> hit,
+        Func<Task<T>> read, Action<T> store, CancellationToken token)
+    {
         while (true)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var seen = Revision();
-            T value;
+            token.ThrowIfCancellationRequested();
+            TaskCompletionSource<T> pending;
+            long seen;
+            bool start;
+            lock (cacheGate)
+            {
+                var (found, value) = hit();
+                if (found) return value;
+                seen = revision;
+                start = state.Pending is null || state.Revision != seen;
+                if (start)
+                {
+                    state.Revision = seen;
+                    state.Pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+                pending = state.Pending!;
+            }
+            if (start) _ = CompleteAsync(pending, seen);
             try
             {
-                value = read();
+                var result = await pending.Task.WaitAsync(token).ConfigureAwait(false);
+                lock (cacheGate) if (revision == seen) return result;
+            }
+            catch (ToolAuthorizationUnavailableException) when (Revision() != seen) { }
+        }
+        async Task CompleteAsync(TaskCompletionSource<T> pending, long seen)
+        {
+            try
+            {
+                T value;
+                try { value = await read().ConfigureAwait(false); }
+                catch
+                {
+                    if (Revision() != seen) throw new ToolAuthorizationUnavailableException();
+                    if (retryDelay is null) await Task.Delay(100).ConfigureAwait(false);
+                    else await retryDelay(CancellationToken.None).ConfigureAwait(false);
+                    value = await read().ConfigureAwait(false);
+                }
+                Publish(seen, value, store);
+                pending.TrySetResult(value);
             }
             catch
             {
-                if (failed)
-                    throw new ToolAuthorizationUnavailableException();
-                failed = true;
-                if (retryDelay is null)
-                    await Task.Delay(100, cancellationToken);
-                else
-                    await retryDelay(cancellationToken);
-                continue;
+                pending.TrySetException(new ToolAuthorizationUnavailableException());
+                _ = pending.Task.Exception;
             }
-            if (Publish(seen, value, store))
-                return value;
+            finally
+            {
+                lock (cacheGate) if (state.Pending == pending) state.Pending = null;
+            }
         }
     }
 
@@ -321,10 +361,9 @@ internal sealed class ToolAuthorizationAuthority
     {
         if (CeilingSource is null)
             return null;
-        cancellationToken.ThrowIfCancellationRequested();
-        if (CeilingHit(out var value))
-            return value;
-        return await ReadFreshAsync(ReadCeiling, StoreCeiling, cancellationToken);
+        return await ReadSharedAsync(ceilingLoad, () => (CeilingHit(out var found), found),
+            async () => await CeilingSource.ReadAsync(CancellationToken.None).ConfigureAwait(false) is { } document
+                ? OperatorCeiling.Parse(document.Text) : null, StoreCeiling, cancellationToken);
     }
 
     // The layers that precede the Agent layers, in evaluation order: the ceiling when one
@@ -334,12 +373,11 @@ internal sealed class ToolAuthorizationAuthority
 
     // An absent policy is the compatibility policy; anything that can't be read as one bounded
     // value throws, and two failures in a row deny (ToolAuthorizationUnavailableException).
-    private ToolAuthorizationPolicy Read()
+    private ToolAuthorizationPolicy Read() => Parse(documents.ReadBounded(ConfigDocumentName.ToolAuthorization, ToolAuthorizationPolicy.MaxBytes));
+
+    private static ToolAuthorizationPolicy Parse(byte[]? bytes)
     {
-        if (
-            documents.ReadBounded(ConfigDocumentName.ToolAuthorization, ToolAuthorizationPolicy.MaxBytes)
-            is not { } bytes
-        )
+        if (bytes is null)
             return ToolAuthorizationPolicy.Compatibility();
         var policy = ToolAuthorizationYaml.Parse(bytes);
         ToolAuthorizationPolicy.Report("policy", policy);
@@ -362,10 +400,9 @@ internal sealed class ToolAuthorizationAuthority
         // Every caller evaluates the ceiling beside the policy; it is read here off the
         // synchronous evaluation path.
         await LoadCeilingAsync(cancellationToken);
-        var value = Hit();
-        if (value is not null)
-            return value;
-        return await ReadFreshAsync(Read, StorePolicy, cancellationToken);
+        return await ReadSharedAsync(policyRead, () => { var found = Hit(); return (found is not null, found!); },
+            async () => Parse(await documents.ReadBoundedAsync(ConfigDocumentName.ToolAuthorization,
+                ToolAuthorizationPolicy.MaxBytes, CancellationToken.None).ConfigureAwait(false)), StorePolicy, cancellationToken);
     }
 
     internal async Task InstallAsync(byte[] bytes, CancellationToken token)

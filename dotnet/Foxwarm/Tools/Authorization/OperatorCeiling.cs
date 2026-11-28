@@ -13,6 +13,7 @@ internal sealed record OperatorCeilingDocument(string Source, string Text);
 internal interface IOperatorCeilingSource
 {
     OperatorCeilingDocument? Read();
+    Task<OperatorCeilingDocument?> ReadAsync(CancellationToken token) => Task.FromResult(Read());
 }
 
 /// <summary>
