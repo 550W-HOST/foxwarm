@@ -351,6 +351,17 @@ jobs:
           # Version N+1 of the rolling-update drill: the same build under another tag.
           docker tag "$FOXWARM_HOSTED_IMAGE" "$FOXWARM_HOSTED_NEXT_IMAGE"
           docker image ls "$FOXWARM_HOSTED_IMAGE" --format 'size {{.Size}}'
+      - name: Qualify hosted decoder confinement and recovery from worker faults
+        timeout-minutes: 2
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/decoder-qualification"
+          docker build --target hosted-decoder-build -t foxwarm-decoder-builder:ci .
+          docker run --rm -v "$RUNNER_TEMP/decoder-qualification:/qual" foxwarm-decoder-builder:ci \
+            dotnet publish dotnet/scripts/ImageDecoderQualification -c Release -r linux-x64 -o /qual
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            -v "$RUNNER_TEMP/decoder-qualification:/qual:ro" --entrypoint /qual/ImageDecoderQualification \
+            "$FOXWARM_HOSTED_IMAGE" /app/Foxwarm.ImageDecoder
       - name: Download the matching Code workbench package
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

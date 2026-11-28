@@ -38,6 +38,14 @@ RUN npm run build:assets \
     && find /out \( -name '*.dbg' -o -name '*.pdb' -o -name '*.xml' \) -delete \
     && test ! -e /out/Foxwarm.dll
 
+# The decoder is a separate NativeAOT executable only for hosted deployments. Main's output
+# already supplies the same RID's libSkiaSharp.so and notices. File-mode/Desktop payloads
+# do not depend on a second executable or Linux process confinement.
+FROM build AS hosted-decoder-build
+RUN case "$(dpkg --print-architecture)" in amd64) rid=linux-x64 ;; arm64) rid=linux-arm64 ;; *) exit 1 ;; esac \
+    && dotnet publish dotnet/Foxwarm.ImageDecoder -c Release -r "$rid" -o /decoder \
+    && test -x /decoder/Foxwarm.ImageDecoder
+
 # Hosted mode (`--target hosted`): the same native payload on a minimal base for stateless
 # replicas. Tenant state lives in PostgreSQL and object storage; a replica writes only to its
 # scratch directory, so the root filesystem can be read-only. The
@@ -45,12 +53,13 @@ RUN npm run build:assets \
 # no tools for Agents: no Chromium, git or Python.
 FROM debian:trixie-slim AS hosted
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata libicu76 libssl3t64 tini \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata libicu76 libssl3t64 tini util-linux libseccomp2 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin foxwarm \
     && mkdir -p /scratch /etc/foxwarm \
     && chown 1000:1000 /scratch
 COPY --from=build /out /app/
+COPY --from=hosted-decoder-build /decoder/Foxwarm.ImageDecoder /app/
 COPY --chmod=755 docker/hosted-entrypoint.sh /usr/local/bin/foxwarm-hosted
 # Replica-specific settings (FOXWARM_REPLICA_ID, FOXWARM_ADVERTISE_ADDRESS) and secrets come from
 # the orchestrator; the scratch directory is an ephemeral mount.
@@ -140,9 +149,10 @@ COPY --from=package . ./
 # The pinned operator runs the full local toolchain over hosted structured stores. The
 # persistent mount holds only its Agent directories, per-tenant scratch and local tool state.
 FROM base AS master-host
-RUN apt-get update && apt-get install -y --no-install-recommends tini && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends tini libseccomp2 && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /master /etc/foxwarm && chown 1000:1000 /master
 COPY --from=build /out /app/
+COPY --from=hosted-decoder-build /decoder/Foxwarm.ImageDecoder /app/
 # The version-matched optional Code package, supplied as a named build context.
 COPY --from=code /foxwarm-code-*.fwassets /app/packages/vscode-web/assets/foxwarm.assets
 COPY --chmod=755 docker/hosted-entrypoint.sh /usr/local/bin/foxwarm-hosted
