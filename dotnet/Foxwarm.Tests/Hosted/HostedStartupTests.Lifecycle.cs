@@ -272,7 +272,7 @@ public sealed partial class HostedStartupTests
     }
 
     [Fact]
-    public async Task ADrainingStandbyIsNotReadyOnceItsPortClosesAndFinishesForwardedConnections()
+    public async Task AStandbyOnSigtermIsNotReadyWhenItsPortClosesAndFinishesForwardedConnections()
     {
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
@@ -287,8 +287,10 @@ public sealed partial class HostedStartupTests
 
         b.Stop.Cancel();
         await WaitUntilAsync(() => b.Inner.Health.Role == ReplicaRole.Stopping, TimeSpan.FromSeconds(5), "replica B is stopping");
-        // Together: the port is closed, readiness fails, and the forwarded connection still works.
-        Assert.True(await RefusedAsync(b.PublicPort));
+        // SIGTERM withdraws readiness first; ending the accept loop and closing the TCP
+        // listener are asynchronous. Observe the port closure itself before checking health.
+        using var portDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!await RefusedAsync(b.PublicPort)) await Task.Delay(10, portDeadline.Token);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, await HealthAsync(b.Inner, "/readyz"));
         Assert.Equal("during", await RoundTripOpenAsync(client, "during"));
         Assert.False(b.Run.IsCompleted);

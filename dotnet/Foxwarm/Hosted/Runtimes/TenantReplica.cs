@@ -170,7 +170,8 @@ internal sealed class TenantReplica
             options.Timings,
             BuildAsync,
             renewer,
-            supervisor
+            supervisor,
+            processStop: stop
         )
         {
             Role = options.Role,

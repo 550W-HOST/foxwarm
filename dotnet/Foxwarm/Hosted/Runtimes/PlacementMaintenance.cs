@@ -106,32 +106,44 @@ internal sealed class PlacementMaintenance(PgDatabase database, string boot, Ten
 
     // SIGTERM always retires. Publish all barriers together, keeping CH's normal settled
     // hand-back for tenants with no eligible alternative. Local gates close independently of DB I/O.
-    internal Task<HashSet<(int TenantId, long Epoch)>> MarkStoppingAsync(CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
+    internal async Task<HashSet<(int TenantId, long Epoch)>> MarkStoppingAsync(CancellationToken token)
     {
-        await tx.ExecuteAsync("UPDATE replicas SET draining=true, capacity=capacity || jsonb_build_object('stopping',true) WHERE replica_id=$1", ct, boot);
-        var live = await ReplicaRegistry.LiveAsync(tx, options.Timings.Ttl, ct);
         HashSet<(int TenantId, long Epoch)> moving = [];
-        await using (var command = tx.Command("""
-            SELECT t.tenant_id,t.name,t.profile,t.pinned_role,t.min_reader_version,l.epoch FROM tenants t JOIN tenant_leases l USING(tenant_id)
-            WHERE l.owner_replica=$1 AND l.state='active' AND l.expires_at>clock_timestamp() AND t.state='active'
-            """, boot))
-        await using (var rows = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
-            while (await rows.ReadAsync(ct).ConfigureAwait(false))
+        try
+        {
+            await database.ClusterAsync(async (tx, ct) =>
             {
-                var floor = rows.GetInt32(4);
-                if (Lease.Placement.Candidates(rows.GetString(1), TenantProfiles.Parse(rows.GetString(2)), rows.IsDBNull(3) ? null : rows.GetString(3), live,
-                    row => !row.Draining && row.Replica != boot && row.ReaderVersion >= floor && row.MeshAddress != null).Count > 0)
-                    moving.Add((rows.GetInt32(0),rows.GetInt64(5)));
-            }
-        await tx.ExecuteAsync("""
-            WITH writable AS (SELECT tenant_id FROM tenant_leases WHERE owner_replica=$1 AND state='active'
-                              ORDER BY tenant_id FOR NO KEY UPDATE SKIP LOCKED)
-            UPDATE tenant_leases l SET draining_since=coalesce(draining_since,clock_timestamp()),
-              requested_action=CASE WHEN l.tenant_id=ANY($2) THEN coalesce(requested_action,'move') ELSE requested_action END
-            FROM tenants t JOIN writable w USING(tenant_id) WHERE l.owner_replica=$1 AND l.state='active' AND l.expires_at>clock_timestamp() AND t.tenant_id=l.tenant_id AND t.state='active'
-            """, ct, boot, moving.Select(grant => grant.TenantId).ToArray());
+                var live = await ReplicaRegistry.LiveAsync(tx, options.Timings.Ttl, ct);
+                await using (var command = tx.Command("""
+                    SELECT t.tenant_id,t.name,t.profile,t.pinned_role,t.min_reader_version,l.epoch FROM tenants t JOIN tenant_leases l USING(tenant_id)
+                    WHERE l.owner_replica=$1 AND l.state='active' AND l.expires_at>clock_timestamp() AND t.state='active'
+                    """, boot))
+                await using (var rows = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
+                    while (await rows.ReadAsync(ct).ConfigureAwait(false))
+                    {
+                        var floor = rows.GetInt32(4);
+                        if (Lease.Placement.Candidates(rows.GetString(1), TenantProfiles.Parse(rows.GetString(2)), rows.IsDBNull(3) ? null : rows.GetString(3), live,
+                            row => !row.Draining && row.Replica != boot && row.ReaderVersion >= floor && row.MeshAddress != null).Count > 0)
+                            moving.Add((rows.GetInt32(0),rows.GetInt64(5)));
+                    }
+                await tx.ExecuteAsync("UPDATE replicas SET draining=true, capacity=capacity || jsonb_build_object('stopping',true) WHERE replica_id=$1", ct, boot);
+                return await tx.ExecuteAsync("""
+                    WITH writable AS (SELECT tenant_id FROM tenant_leases WHERE owner_replica=$1 AND state='active'
+                                      ORDER BY tenant_id FOR NO KEY UPDATE SKIP LOCKED)
+                    UPDATE tenant_leases l SET draining_since=coalesce(draining_since,clock_timestamp()),
+                      requested_action=CASE WHEN l.tenant_id=ANY($2) THEN coalesce(requested_action,'move') ELSE requested_action END
+                    FROM tenants t JOIN writable w USING(tenant_id) WHERE l.owner_replica=$1 AND l.state='active' AND l.expires_at>clock_timestamp() AND t.tenant_id=l.tenant_id AND t.state='active'
+                    """, ct, boot, moving.Select(grant => grant.TenantId).ToArray());
+            }, token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (!token.IsCancellationRequested && error is (Npgsql.NpgsqlException or TimeoutException or OperationCanceledException))
+        {
+            // Local stop is already latched. The marker only helps other edges reroute;
+            // each confirmed tenant can still hand back its own schedule on its control connection.
+            log("[hosted] Could not publish the bulk stop marker: " + error.Message);
+        }
         return moving;
-    }, token);
+    }
 }
 
 /// <summary>A preference must remain continuous across observations of the same resident epoch.</summary>

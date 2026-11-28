@@ -210,7 +210,8 @@ internal sealed class TenantLease
         TimeSpan ttl,
         TimeSpan lockTimeout,
         CancellationToken token,
-        TimeSpan? autonomousLead = null
+        TimeSpan? autonomousLead = null,
+        CancellationToken processStop = default
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
@@ -265,6 +266,9 @@ internal sealed class TenantLease
             if (await demand.ExecuteScalarAsync(token).ConfigureAwait(false) is not true)
                 throw new AutonomousDemandSettledException();
         }
+        // The process can stop while this claim waits for the lease lock. Decline here
+        // without canceling any database write: once a commit starts its outcome must be known.
+        if (processStop.IsCancellationRequested) return null;
         await using var update = new NpgsqlCommand(
             "UPDATE tenant_leases l SET owner_replica = $2, requested_action = NULL, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3), draining_since = NULL"

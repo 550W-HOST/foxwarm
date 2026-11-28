@@ -6,6 +6,33 @@ namespace Foxwarm.Tests.Hosted;
 
 public sealed partial class WakeupLifecycleTests
 {
+    [Fact]
+    public async Task FailedBulkStopMarkerStillHandsBackTheSettledCron()
+    {
+        await using var live = await LiveReplica.StartAsync();
+        var generation = await live.Generations.ActivateAsync(live.Slug);
+        var sessions = live.Current.Host.Sessions;
+        var owner = await sessions.CreateNamedAsync("main", "schedule", null, null);
+        await sessions.Timers.CreateAsync(new System.Text.Json.Nodes.JsonObject
+        {
+            ["sessionId"] = owner.Id, ["message"] = "future occurrence", ["cron"] = $"21 {(DateTime.Now.Hour+6)%24} * * *"
+        }, default);
+        await live.Db.ExecuteOwnerAsync("""
+            CREATE FUNCTION reject_stop_marker() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'marker interrupted' USING ERRCODE='40001'; END $$;
+            CREATE TRIGGER reject_stop_marker BEFORE UPDATE ON replicas FOR EACH ROW
+              WHEN (NEW.capacity->>'stopping'='true') EXECUTE FUNCTION reject_stop_marker()
+            """);
+        live.Stop.Cancel();
+        Assert.True((await generation.Stopped.WaitAsync(TimeSpan.FromSeconds(10))).Confirmed);
+        Assert.True(generation.ScheduleSettled);
+        Assert.NotNull(generation.HandBack?.Occurrence);
+        Assert.True(await live.Generations.ShutdownAsync());
+        Assert.Equal("released", await live.Db.ScalarAsync("SELECT state FROM tenant_leases WHERE tenant_id=$1", generation.Id.TenantId));
+        var durable = await live.Db.ScalarAsync("SELECT occurrence::text FROM tenant_wakeups WHERE tenant_id=$1 AND due_at>now()",generation.Id.TenantId);
+        Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(generation.HandBack.Occurrence, System.Text.Json.Nodes.JsonNode.Parse((string)durable!)));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

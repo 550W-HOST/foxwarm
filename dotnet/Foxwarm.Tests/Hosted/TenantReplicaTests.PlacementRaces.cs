@@ -8,6 +8,50 @@ namespace Foxwarm.Tests.Hosted;
 
 public sealed partial class TenantReplicaTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ActivationCrossingStopCannotPublishOrAdmit(bool waitingForLease)
+    {
+        await using var source = await StartAsync("cold", "warm");
+        await source.WhoAmIAsync("warm");
+        var id = await source.Database.TenantIdAsync("cold");
+        await using var op = new PgDatabase(source.Database.OperatorConnectionString, "placement-stop");
+        Assert.True(await new ReplicaPlacementRequests(op, Fast).RequestReplicaDrainAsync(source.Replica.Replica, default));
+        await using var connection = new NpgsqlConnection(source.Database.OwnerConnectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        if (waitingForLease)
+        {
+            await using var command = new NpgsqlCommand("SELECT tenant_id FROM tenant_leases WHERE tenant_id=$1 FOR UPDATE", connection, transaction);
+            command.Parameters.Add(PgTx.Parameter(id));
+            await command.ExecuteScalarAsync();
+        }
+        else source.StartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pending = source.GetAsync("cold");
+        if (waitingForLease)
+            await UntilAsync(async () => await source.Database.ScalarAsync("SELECT EXISTS(SELECT FROM pg_stat_activity WHERE datname=current_database() AND application_name='foxwarm-control' AND wait_event_type='Lock')") is true, "activation queued on the lease");
+        else await UntilAsync(() => source.EventList().Contains("cold:start-waits"), "unpublished runtime starting");
+        var signaled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var resume = new ManualResetEventSlim();
+        using var callback = source.Stop.Token.Register(() => { signaled.TrySetResult(); resume.Wait(); });
+        var cancel = Task.Run(source.Stop.Cancel);
+        try
+        {
+            await signaled.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await transaction.CommitAsync();
+            source.StartGate?.TrySetResult();
+            using var ready = await source.Client.GetAsync($"http://127.0.0.1:{source.Replica.HealthPort}/readyz");
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, ready.StatusCode);
+            var results = await Task.WhenAll(pending, source.GetAsync("cold"), source.GetAsync("warm"));
+            foreach (var result in results) { using (result) Assert.Equal(HttpStatusCode.ServiceUnavailable, result.StatusCode); }
+            Assert.Null(source.Replica.Activations!.Current("cold"));
+            Assert.Equal("released", await source.Database.ScalarAsync("SELECT state FROM tenant_leases WHERE tenant_id=$1", id));
+            Assert.Equal(waitingForLease ? 0L : 1L, await source.Database.ScalarAsync("SELECT epoch FROM tenant_leases WHERE tenant_id=$1", id));
+        }
+        finally { resume.Set(); source.StartGate?.TrySetResult(); await cancel; }
+    }
+
     [Fact]
     public async Task AdministrativeDrainCannotRestoreReadinessAfterTheStopSignal()
     {
