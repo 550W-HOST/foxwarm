@@ -107,7 +107,8 @@ internal sealed class TenantActivations : IAsyncDisposable
     internal async Task<TenantGeneration> ActivateAsync(
         string tenant,
         ActivationCause cause = ActivationCause.Request,
-        CancellationToken token = default
+        CancellationToken token = default,
+        int? expectedTenantId = null
     )
     {
         while (true)
@@ -121,7 +122,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                 if (slot.Current is { } current)
                 {
                     if (current.Handle.IsCurrent(clock()))
-                        return current;
+                        return Match(current);
                     stale = current.Handle;
                     activation = null!;
                 }
@@ -130,7 +131,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                     if (slot.Releasing is not null)
                         slot.Demand = true;
                     slot.Autonomous |= cause != ActivationCause.Request;
-                    activation = slot.Activation ??= Task.Run(() => RunActivationAsync(slot, cause));
+                    activation = slot.Activation ??= Task.Run(() => RunActivationAsync(slot, cause, expectedTenantId));
                 }
             }
             if (stale is not null)
@@ -139,12 +140,15 @@ internal sealed class TenantActivations : IAsyncDisposable
                 renewer.Lose(stale, Expired);
                 continue;
             }
-            try { return await activation.WaitAsync(token).ConfigureAwait(false); }
+            try { return Match(await activation.WaitAsync(token).ConfigureAwait(false)); }
             catch (AutonomousDemandSettledException) when (cause == ActivationCause.Request)
             {
                 // A request joined a stale scan. Its own demand may still start the tenant.
             }
         }
+
+        TenantGeneration Match(TenantGeneration generation) => expectedTenantId is null || generation.Id.TenantId == expectedTenantId
+            ? generation : throw new TenantHeldElsewhereException(tenant);
     }
 
     /// <summary>
@@ -161,7 +165,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         while (true)
         {
             var generation = await ActivateAsync(tenant, cause, token).ConfigureAwait(false);
-            if (TryAdmitExact(tenant, generation.Id.Epoch, replica) is { } admitted)
+            if (TryAdmitExact(tenant, generation.Id.TenantId, generation.Id.Epoch, replica) is { } admitted)
                 return admitted;
             if (!generation.Handle.IsCurrent(clock()))
                 renewer.Lose(generation.Handle, Expired);
@@ -174,12 +178,12 @@ internal sealed class TenantActivations : IAsyncDisposable
 
     /// <summary>Pin an exact dispatch without activating a tenant or following a stale route.</summary>
     internal (TenantGeneration Generation, AdmissionGate.Admission Admission)? TryAdmitExact(
-        string tenant, long epoch, string receiverBoot)
+        string tenant, int tenantId, long epoch, string receiverBoot)
     {
         lock (gate)
         {
             if (disposed || processStop.IsCancellationRequested || receiverBoot != replica || !slots.TryGetValue(tenant, out var slot)
-                || slot.Current is not { } current || current.Id.Epoch != epoch)
+                || slot.Current is not { } current || current.Id.Epoch != epoch || current.Id.TenantId != tenantId)
                 return null;
             return current.Gate.TryEnter() is { } admission ? (current, admission) : null;
         }
@@ -530,7 +534,7 @@ internal sealed class TenantActivations : IAsyncDisposable
         return generation;
     }
 
-    private async Task<TenantGeneration> RunActivationAsync(Slot slot, ActivationCause cause)
+    private async Task<TenantGeneration> RunActivationAsync(Slot slot, ActivationCause cause, int? expectedTenantId)
     {
         // Set when publication cleared the slot's activation under the lock; until then the
         // slot's activation is this one, and no other can start.
@@ -580,7 +584,7 @@ internal sealed class TenantActivations : IAsyncDisposable
                 {
                     acquired = await slot.Lease
                         .TryAcquireAsync(replica, timings.Ttl, timings.RenewInterval, CancellationToken.None,
-                            cause == ActivationCause.Request ? null : Autonomous.Wakeups.Interval, processStop)
+                            cause == ActivationCause.Request ? null : Autonomous.Wakeups.Interval, processStop, expectedTenantId)
                         .ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is not (TenantNotEligibleException or LeaseRefusedException or AutonomousDemandSettledException))
@@ -616,6 +620,8 @@ internal sealed class TenantActivations : IAsyncDisposable
                     throw new TenantFencedException($"Tenant {slot.Lease.Tenant} was acquired during shutdown and handed back.");
                 }
             }
+            if (expectedTenantId is not null && held.Grant.TenantId != expectedTenantId)
+                throw new TenantHeldElsewhereException(slot.Lease.Tenant);
             if (BeforeRegister is { } hook)
                 await hook().ConfigureAwait(false);
             generation = Register(slot, held);

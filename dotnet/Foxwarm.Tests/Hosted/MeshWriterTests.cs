@@ -63,7 +63,7 @@ public sealed class MeshWriterTests
         using var mesh = new MeshTransport(new MeshAuthentication(new byte[32], "edge"));
         using var cleanup = new CancellationTokenSource(WebSocketEnd.CloseGrace + TimeSpan.FromSeconds(4));
         context.RequestAborted = cleanup.Token;
-        await mesh.DispatchAsync(context, app.Services.GetRequiredService<IHttpForwarder>(), new("owner", 1, app.Urls.Single()), "alpha", default, () => { });
+        await mesh.DispatchAsync(context, app.Services.GetRequiredService<IHttpForwarder>(), new("owner", 1, app.Urls.Single()), new("alpha", 42), default, () => { });
         Assert.False(cleanup.IsCancellationRequested);
         await ended.Task.WaitAsync(cleanup.Token);
         Assert.Equal(new byte[] { 0x81, 4, 108, 97, 115, 116 }, client.ToArray());
@@ -90,7 +90,7 @@ public sealed class MeshWriterTests
         context.Request.Protocol = "HTTP/1.1";
         context.Request.Host = new("alpha.test");
         context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>()!.RawTarget = "/";
-        var result = await mesh.DispatchAsync(context, app.Services.GetRequiredService<IHttpForwarder>(), new("owner", 1, app.Urls.Single()), "alpha", budget.Token, () => { });
+        var result = await mesh.DispatchAsync(context, app.Services.GetRequiredService<IHttpForwarder>(), new("owner", 1, app.Urls.Single()), new("alpha", 42), budget.Token, () => { });
         Assert.True(budget.IsCancellationRequested);
         Assert.Equal(DispatchOutcome.NotDispatched, result);
         Assert.Equal(0, received);
@@ -179,7 +179,7 @@ public sealed class MeshWriterTests
         {
             context.Request.Body = new IncompleteUpload(finished.Task);
             await mesh.DispatchAsync(context, front.Services.GetRequiredService<IHttpForwarder>(), new("owner", 1, "http://owner"),
-                "alpha", context.RequestAborted, () => { });
+                new("alpha", 42), context.RequestAborted, () => { });
         });
         await front.StartAsync();
         using var http = new HttpClient(new SocketsHttpHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(8) };
@@ -238,7 +238,7 @@ public sealed class MeshWriterTests
             var held = 1;
             Interlocked.Increment(ref permits);
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            await mesh.DispatchAsync(context, edge.Services.GetRequiredService<IHttpForwarder>(), new("owner", 1, address), "alpha",
+            await mesh.DispatchAsync(context, edge.Services.GetRequiredService<IHttpForwarder>(), new("owner", 1, address), new("alpha", 42),
                 deadline.Token, () => { if (Interlocked.Exchange(ref held, 0) == 1) Interlocked.Decrement(ref permits); });
         });
         await edge.StartAsync();

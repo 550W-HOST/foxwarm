@@ -92,7 +92,7 @@ public sealed class PlacementWaveProcessTests(ITestOutputHelper output)
             command.Parameters.Add(new Npgsql.NpgsqlParameter<string> { TypedValue=slugs[1] });
             await command.ExecuteScalarAsync();
         }
-        async Task<int> Waiters() => Convert.ToInt32(await cluster.Database.ScalarAsync("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT 1 FROM tenant_leases%FOR UPDATE OF l%'"));
+        async Task<int> Waiters() => Convert.ToInt32(await cluster.Database.ScalarAsync("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT l.tenant_id FROM tenant_leases%FOR UPDATE OF l%'"));
         var first = left.GetAsync(slugs[1]);
         await UntilAsync(async () => await Waiters() == 1,"first edge's rank-one boot is waiting on the lease",5);
         // Change the published capacity between the two edges' rank reads. Hold the registry

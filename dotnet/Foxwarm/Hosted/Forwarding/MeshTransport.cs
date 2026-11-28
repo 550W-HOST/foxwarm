@@ -1,3 +1,4 @@
+using Foxwarm.Hosted.Runtimes;
 using System.Net;
 using Microsoft.AspNetCore.Http;
 using Foxwarm.Net;
@@ -63,10 +64,10 @@ internal sealed class MeshTransport(MeshAuthentication authentication, HttpMessa
         ActivityTimeout = TimeSpan.FromMinutes(10),
     };
 
-    internal async Task ActivateAsync(string address, string candidate, string slug, string host, CancellationToken token)
+    internal async Task ActivateAsync(string address, string candidate, HostTenant tenant, string host, CancellationToken token)
     {
         const string path = "/";
-        var (_, header) = authentication.Sign("activate", candidate, slug, null, "POST", host, path);
+        var (_, header) = authentication.Sign("activate", candidate, tenant.Slug, tenant.Id, null, "POST", host, path);
         using var request = new HttpRequestMessage(HttpMethod.Post, address + path)
         {
             Version = HttpVersion.Version20, VersionPolicy = HttpVersionPolicy.RequestVersionExact,
@@ -79,11 +80,11 @@ internal sealed class MeshTransport(MeshAuthentication authentication, HttpMessa
     }
 
     internal async Task<DispatchOutcome> DispatchAsync(HttpContext context, IHttpForwarder forwarder,
-        DispatchRoute route, string slug, CancellationToken budget, Action endHold)
+        DispatchRoute route, HostTenant tenant, CancellationToken budget, Action endHold)
     {
         using var boundary = new AttemptBoundary(budget, context.RequestAborted, endHold);
         using var end = WebSocketEnd.Observe(context.Features, boundary.ClientEof);
-        var transform = new MeshTransform(authentication, route, slug, boundary);
+        var transform = new MeshTransform(authentication, route, tenant, boundary);
         var error = await forwarder.SendAsync(context, route.MeshAddress!, client, Config, transform, boundary.Token)
             .ConfigureAwait(false);
         if (transform.Refused && !context.Response.HasStarted)
@@ -144,7 +145,7 @@ internal sealed class MeshTransport(MeshAuthentication authentication, HttpMessa
         }
     }
 
-    private sealed class MeshTransform(MeshAuthentication authentication, DispatchRoute route, string slug,
+    private sealed class MeshTransform(MeshAuthentication authentication, DispatchRoute route, HostTenant tenant,
         AttemptBoundary boundary) : HttpTransformer
     {
         private MeshAttempt? attempt;
@@ -161,7 +162,7 @@ internal sealed class MeshTransport(MeshAuthentication authentication, HttpMessa
             message.RequestUri = new Uri(destinationPrefix + target,
                 new UriCreationOptions { DangerousDisablePathAndQueryCanonicalization = true });
             message.Headers.Host = context.Request.Host.Value;
-            var signed = authentication.Sign("dispatch", route.Boot, slug, route.Epoch,
+            var signed = authentication.Sign("dispatch", route.Boot, tenant.Slug, tenant.Id, route.Epoch,
                 message.Method.Method, message.Headers.Host, target);
             attempt = signed.Attempt;
             message.Headers.TryAddWithoutValidation(MeshAuthentication.Header, signed.Header);

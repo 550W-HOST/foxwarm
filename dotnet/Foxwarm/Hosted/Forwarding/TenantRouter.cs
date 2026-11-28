@@ -57,12 +57,13 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
             return;
         }
         MeshAuthentication.StripControlHeaders(request.Headers);
-        var slug = await hosts.ResolveAsync(request.Host.Host, context.RequestAborted).ConfigureAwait(false);
-        if (slug != attempt.Tenant)
+        var tenant = await hosts.ResolveAsync(request.Host.Host, context.RequestAborted).ConfigureAwait(false);
+        if (tenant is null || tenant.Id != attempt.TenantId || tenant.Slug != attempt.Tenant)
         {
             Refuse(context, attempt);
             return;
         }
+        var slug = tenant.Slug;
         if (attempt.Purpose == "activate")
         {
             if (request.Method != "POST" || MeshAuthentication.RawTarget(request) != "/" || !MayActivate(slug))
@@ -72,7 +73,7 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
             }
             try
             {
-                await activations.ActivateAsync(slug, token: context.RequestAborted).ConfigureAwait(false);
+                await activations.ActivateAsync(slug, token: context.RequestAborted, expectedTenantId: tenant.Id).ConfigureAwait(false);
                 context.Response.StatusCode = StatusCodes.Status204NoContent;
             }
             catch (Exception error) when (!context.RequestAborted.IsCancellationRequested)
@@ -82,7 +83,7 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
             }
             return;
         }
-        if (activations.TryAdmitExact(slug, attempt.Epoch!.Value, attempt.Receiver) is not { } exact)
+        if (activations.TryAdmitExact(slug, tenant.Id, attempt.Epoch!.Value, attempt.Receiver) is not { } exact)
         {
             Refuse(context, attempt);
             return;
@@ -120,25 +121,27 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
         var dispatched = false;
         try
         {
-            var slug = await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false);
-            if (slug is null) { context.Response.StatusCode = 404; return; }
+            var tenant = await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false);
+            if (tenant is null) { context.Response.StatusCode = 404; return; }
+            var slug = tenant.Slug;
             var hasBody = context.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody
                 ?? (request.ContentLength > 0 || request.Headers.ContainsKey("Transfer-Encoding"));
             while (!budget.IsCancellationRequested)
             {
-                if (await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false) != slug)
+                if (await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false) != tenant)
                 {
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
                     return;
                 }
                 var state = await ReadAsync(slug, budget.Token).ConfigureAwait(false);
+                if (state is not null && state.TenantId != tenant.Id) { context.Response.StatusCode = 404; return; }
                 if (state is not { Available: true }) break;
                 var route = state.Owner;
                 if (route is null)
-                    route = await ActivateAsync(slug, state, request.Host.Value, budget.Token).ConfigureAwait(false);
+                    route = await ActivateAsync(tenant, state, request.Host.Value, budget.Token).ConfigureAwait(false);
                 if (route is not null && !state.Draining)
                 {
-                    if (await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false) != slug)
+                    if (await hosts.ResolveAsync(request.Host.Host, budget.Token).ConfigureAwait(false) != tenant)
                     {
                         context.Response.StatusCode = StatusCodes.Status404NotFound;
                         return;
@@ -148,7 +151,7 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
                     // owner-side limit and a body the selected route can configure before reading.
                     if (route.Boot == boot && body is null)
                     {
-                        if (activations.TryAdmitExact(slug, route.Epoch, route.Boot) is { } local)
+                        if (activations.TryAdmitExact(slug, tenant.Id, route.Epoch, route.Boot) is { } local)
                         {
                             using (local.Admission)
                             {
@@ -173,7 +176,7 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
                             }
                             request.Body = body = new ForwardedBody(originalBody, request.ContentLength, reservedBuffer);
                         }
-                        var outcome = await transport.DispatchAsync(context, forwarder, route, slug, budget.Token, EndHold).ConfigureAwait(false);
+                        var outcome = await transport.DispatchAsync(context, forwarder, route, tenant, budget.Token, EndHold).ConfigureAwait(false);
                         if (outcome == DispatchOutcome.Completed) return;
                         if (body is not null && !body.RewindIfAvailable()) break;
                         if (held == 0 && !Enter()) break;
@@ -220,8 +223,9 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
         return await directory.CancelUnavailableMoveAsync(state, token).ConfigureAwait(false) ? candidates : [];
     }
 
-    private async Task<DispatchRoute?> ActivateAsync(string slug, TenantRouteState state, string host, CancellationToken token)
+    private async Task<DispatchRoute?> ActivateAsync(HostTenant tenant, TenantRouteState state, string host, CancellationToken token)
     {
+        var slug = tenant.Slug;
         var candidates = await CandidatesAsync(slug, state, token).ConfigureAwait(false);
         foreach (var candidate in candidates)
         {
@@ -232,18 +236,18 @@ internal sealed class TenantRouter(string boot, MeshAuthentication authenticatio
             {
                 if (candidate.Replica == boot && MayActivate(slug))
                 {
-                    var generation = await activations.ActivateAsync(slug, token: attempt.Token).ConfigureAwait(false);
+                    var generation = await activations.ActivateAsync(slug, token: attempt.Token, expectedTenantId: tenant.Id).ConfigureAwait(false);
                     return new(boot, generation.Id.Epoch, candidate.MeshAddress);
                 }
                 if (candidate.Replica != boot && candidate.MeshAddress is not null)
-                    await transport.ActivateAsync(candidate.MeshAddress, candidate.Replica, slug, host, attempt.Token).ConfigureAwait(false);
+                    await transport.ActivateAsync(candidate.MeshAddress, candidate.Replica, tenant, host, attempt.Token).ConfigureAwait(false);
             }
             catch (Exception error) when (!token.IsCancellationRequested)
             {
                 if (candidate.Replica == boot) LogActivation(slug, error);
             }
             var updated = await ReadAsync(slug, token).ConfigureAwait(false);
-            if (updated is not { Available: true, Draining: false }) return null;
+            if (updated is not { Available: true, Draining: false } || updated.TenantId != tenant.Id) return null;
             if (updated.Owner is { } owner) return owner;
         }
         return null;

@@ -70,7 +70,7 @@ public sealed partial class HostedImportTests
         var admin = new Foxwarm.Hosted.Operator.OperatorStore(control, HostedTestBackend.Kek);
         await admin.UpdateAsync("ops", new JsonObject { ["primaryHostname"] = "ops.example.test" }, default);
         var hosts = new Foxwarm.Hosted.Runtimes.HostnameDirectory(db.OpenApp());
-        Assert.Equal("ops", await hosts.ResolveAsync("ops.example.test", default));
+        Assert.Equal("ops", (await hosts.ResolveAsync("ops.example.test", default))?.Slug);
     }
 
     [Fact]

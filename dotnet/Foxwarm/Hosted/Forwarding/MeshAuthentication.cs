@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Http.Features;
 
 namespace Foxwarm.Hosted.Forwarding;
 
-internal sealed record MeshAttempt(string Purpose, string Sender, string Receiver, string Tenant, long? Epoch, string Nonce);
+internal sealed record MeshAttempt(string Purpose, string Sender, string Receiver, string Tenant, int TenantId, long? Epoch, string Nonce);
 
 /// <summary>Hop authentication shared by one boot's mesh client and listener.</summary>
 internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? clock = null, int nonceLimit = MeshAuthentication.MaxNonces)
@@ -26,19 +26,19 @@ internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? 
     private static int ActivationReserve(int limit) => Math.Max(1, limit / 16);
 
     // Used under gate. Entries in the expiry queue share the tenant key and counters.
-    private sealed class NonceShare(NoncePool pool, string tenant)
+    private sealed class NonceShare(NoncePool pool, int tenant)
     {
         internal readonly NoncePool Pool = pool;
-        internal readonly string Tenant = tenant;
+        internal readonly int TenantId = tenant;
         internal int Used;
     }
 
     private sealed class NoncePool(int capacity, int tenantLimit)
     {
-        private readonly Dictionary<string, NonceShare> tenants = new(StringComparer.Ordinal);
+        private readonly Dictionary<int, NonceShare> tenants = [];
         private int used;
 
-        internal NonceShare? TryTake(string tenant)
+        internal NonceShare? TryTake(int tenant)
         {
             if (used >= capacity) return null;
             if (!tenants.TryGetValue(tenant, out var share))
@@ -52,16 +52,16 @@ internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? 
         internal void Expire(NonceShare share)
         {
             used--;
-            if (--share.Used == 0) tenants.Remove(share.Tenant);
+            if (--share.Used == 0) tenants.Remove(share.TenantId);
         }
     }
 
-    internal (MeshAttempt Attempt, string Header) Sign(string purpose, string receiver, string tenant, long? epoch,
+    internal (MeshAttempt Attempt, string Header) Sign(string purpose, string receiver, string tenant, int tenantId, long? epoch,
         string method, string authority, string target)
     {
         var nonce = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
-        var attempt = new MeshAttempt(purpose, boot, receiver, tenant, epoch, nonce);
-        var fields = new[] { "v1", purpose, boot, receiver, tenant, epoch?.ToString(CultureInfo.InvariantCulture) ?? "",
+        var attempt = new MeshAttempt(purpose, boot, receiver, tenant, tenantId, epoch, nonce);
+        var fields = new[] { "v2", purpose, boot, receiver, tenant, tenantId.ToString(CultureInfo.InvariantCulture), epoch?.ToString(CultureInfo.InvariantCulture) ?? "",
             clock.GetUtcNow().ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture), nonce };
         var mac = Mac([.. fields, method, authority, target]);
         return (attempt, string.Join(';', fields) + ";" + Convert.ToHexStringLower(mac));
@@ -75,22 +75,23 @@ internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? 
         if (!request.Headers.TryGetValue(Header, out var values) || values.Count != 1 || values[0] is not { Length: <= 2048 } header)
             return null;
         var f = header.Split(';');
-        if (f.Length != 9 || f[0] != "v1" || f[1] is not ("activate" or "dispatch") || f[2].Length == 0 || f[3] != boot
-            || f[4].Length == 0 || f[7].Length != 32 || !f[7].All(char.IsAsciiHexDigitLower)
-            || !long.TryParse(f[6], NumberStyles.None, CultureInfo.InvariantCulture, out var ts))
+        if (f.Length != 10 || f[0] != "v2" || f[1] is not ("activate" or "dispatch") || f[2].Length == 0 || f[3] != boot
+            || !int.TryParse(f[5], NumberStyles.None, CultureInfo.InvariantCulture, out var tenantId) || tenantId <= 0
+            || f[4].Length == 0 || f[8].Length != 32 || !f[8].All(char.IsAsciiHexDigitLower)
+            || !long.TryParse(f[7], NumberStyles.None, CultureInfo.InvariantCulture, out var ts))
             return null;
         long? epoch = null;
         if (f[1] == "dispatch")
         {
-            if (!long.TryParse(f[5], NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value < 1)
+            if (!long.TryParse(f[6], NumberStyles.None, CultureInfo.InvariantCulture, out var value) || value < 1)
                 return null;
             epoch = value;
         }
-        else if (f[5].Length != 0)
+        else if (f[6].Length != 0)
             return null;
         var now = clock.GetUtcNow().ToUnixTimeSeconds();
-        if (ts < now - SkewSeconds || ts > now + SkewSeconds || !Matches(f[8],
-                Mac([.. f.AsSpan(0, 8), request.Method, request.Host.Value, RawTarget(request)])))
+        if (ts < now - SkewSeconds || ts > now + SkewSeconds || !Matches(f[9],
+                Mac([.. f.AsSpan(0, 9), request.Method, request.Host.Value, RawTarget(request)])))
             return null;
         lock (gate)
         {
@@ -100,9 +101,9 @@ internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? 
                 seen.Remove(old.Nonce);
                 old.Share.Pool.Expire(old.Share);
             }
-            var nonce = UInt128.Parse(f[7], NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
+            var nonce = UInt128.Parse(f[8], NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
             if (seen.Contains(nonce)) return null;
-            var share = (f[1] == "activate" ? activation : dispatch).TryTake(f[4]);
+            var share = (f[1] == "activate" ? activation : dispatch).TryTake(tenantId);
             if (share is null)
             {
                 full = true;
@@ -111,13 +112,13 @@ internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? 
             seen.Add(nonce);
             expiry.Enqueue((nonce, share), now + 2 * SkewSeconds);
         }
-        return new(f[1], f[2], f[3], f[4], epoch, f[7]);
+        return new(f[1], f[2], f[3], f[4], tenantId, epoch, f[8]);
     }
 
     internal string Refuse(MeshAttempt attempt) => Convert.ToHexStringLower(RefusalMac(attempt));
     internal bool IsRefusal(MeshAttempt attempt, string value) => Matches(value, RefusalMac(attempt));
 
-    private byte[] RefusalMac(MeshAttempt a) => Mac(["refused-v1", a.Purpose, a.Sender, a.Receiver, a.Tenant,
+    private byte[] RefusalMac(MeshAttempt a) => Mac(["refused-v2", a.Purpose, a.Sender, a.Receiver, a.Tenant, a.TenantId.ToString(CultureInfo.InvariantCulture),
         a.Epoch?.ToString(CultureInfo.InvariantCulture) ?? "", a.Nonce]);
 
     private byte[] Mac(string[] fields)

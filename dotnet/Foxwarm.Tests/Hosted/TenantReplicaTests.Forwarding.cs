@@ -9,6 +9,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
+using Yarp.ReverseProxy.Forwarder;
 using Xunit;
 
 namespace Foxwarm.Tests.Hosted;
@@ -113,7 +115,7 @@ public sealed partial class TenantReplicaTests
             request.Path = "/";
             context.Features.Get<IHttpRequestFeature>()!.RawTarget = "/";
             request.Headers[MeshAuthentication.Header] = edge.Sign(activate ? "activate" : "dispatch", boot,
-                tenant, activate ? null : active.Current(tenant)!.Id.Epoch, request.Method, request.Host.Value, "/").Header;
+                tenant, active.Current(tenant)!.Id.TenantId, activate ? null : active.Current(tenant)!.Id.Epoch, request.Method, request.Host.Value, "/").Header;
             await router.MeshAsync(context);
             return context.Response.StatusCode;
         }
@@ -123,6 +125,74 @@ public sealed partial class TenantReplicaTests
         Assert.Equal(204, await Send("beta"));
         Assert.Equal(204, await Send("alpha", activate: true));
     }
+
+    [Fact]
+    public async Task AStaleDirectoryCannotActivateOrAdmitTheReplacementAtTheSameBootAndEpoch()
+    {
+        await using var cluster = await StartAsync("alpha");
+        var db = cluster.Database;
+        var boot = cluster.Replica.Replica;
+        var oldId = await db.TenantIdAsync("alpha");
+        var oldEpoch = await db.TakeLeaseAsync(oldId, boot);
+        await using var app = db.OpenApp();
+        var hosts = new HostnameDirectory(app);
+        await hosts.RefreshAsync(default);
+        var auth = new MeshAuthentication(cluster.MeshKey, boot);
+        var activations = cluster.Replica.Activations!;
+        var calls = 0;
+        using var router = new TenantRouter(boot, auth, new RouteDirectory(app), new ReplicaRegistry(app),
+            activations, hosts, LeaseTimings.Default, (_, context) =>
+            {
+                calls++;
+                context.Response.StatusCode = 200;
+                return Task.CompletedTask;
+            }, () => true, _ => {}, default);
+        async Task<int> Send(int id, bool activate)
+        {
+            var context = new DefaultHttpContext();
+            var request = context.Request;
+            request.Method = activate ? "POST" : "GET";
+            request.Host = new("alpha.test");
+            context.Features.Get<IHttpRequestFeature>()!.RawTarget = "/";
+            var signed = auth.Sign(activate ? "activate" : "dispatch", boot, "alpha", id,
+                activate ? null : oldEpoch, request.Method, "alpha.test", "/");
+            request.Headers[MeshAuthentication.Header] = signed.Header;
+            await router.MeshAsync(context);
+            if (context.Response.StatusCode == 421)
+                Assert.True(auth.IsRefusal(signed.Attempt, context.Response.Headers[MeshAuthentication.Refusal].ToString()));
+            return context.Response.StatusCode;
+        }
+        await ReplaceAlphaAsync(db);
+        var newId = await db.TenantIdAsync("alpha");
+        Assert.NotEqual(oldId, newId);
+        Assert.Equal(421, await Send(oldId, activate: true)); // Stale directory, but the locked lease is the replacement's.
+        Assert.Null(activations.Current("alpha"));
+        var current = await activations.ActivateAsync("alpha", expectedTenantId: newId);
+        Assert.Equal(oldEpoch, current.Id.Epoch);
+        // The stale edge resolves the original ID, but the current lease belongs to the replacement.
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddHttpForwarder();
+        await using var server = builder.Build();
+        var held = new DefaultHttpContext();
+        held.Request.Host = new("alpha.test");
+        await router.PublicAsync(held, server.Services.GetRequiredService<IHttpForwarder>());
+        Assert.Equal(404, held.Response.StatusCode);
+        Assert.Equal(421, await Send(oldId, activate: false)); // Slug, epoch, boot and cached hostname all match.
+        await hosts.RefreshAsync(default);
+        Assert.Equal(421, await Send(oldId, activate: false)); // Now the receiver also sees the new hostname binding.
+        Assert.Equal(0, calls);
+        Assert.Equal(200, await Send(newId, activate: false));
+        Assert.Equal(1, calls);
+    }
+
+    private static Task ReplaceAlphaAsync(HostedTestDatabase database) => database.ExecuteOwnerAsync("""
+        DELETE FROM tenant_hostnames WHERE tenant_id=(SELECT tenant_id FROM tenants WHERE name='alpha');
+        DELETE FROM tenant_leases WHERE tenant_id=(SELECT tenant_id FROM tenants WHERE name='alpha');
+        DELETE FROM tenants WHERE name='alpha';
+        INSERT INTO tenants(name) VALUES ('alpha');
+        INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM tenants WHERE name='alpha';
+        INSERT INTO tenant_hostnames(hostname,tenant_id,kind) SELECT 'alpha.test',tenant_id,'primary' FROM tenants WHERE name='alpha';
+        """);
 
     [Fact]
     public async Task RemoteNodeFileTransferStreamsPastTheFrontDefaultToTheRealTransferRoute()
@@ -337,9 +407,10 @@ public sealed partial class TenantReplicaTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ARemoteActivationCannotDispatchThroughABindingTheEdgeAlreadyInvalidated(bool reassigned)
+    [InlineData("remove")]
+    [InlineData("reassign")]
+    [InlineData("recreate")]
+    public async Task ARemoteActivationCannotDispatchThroughABindingTheEdgeAlreadyInvalidated(string change)
     {
         await using var edge = await StartAsync(LeaseTimings.Default, "alpha", "beta");
         await edge.WhoAmIAsync("beta");
@@ -348,6 +419,8 @@ public sealed partial class TenantReplicaTests
         var boot = candidate + "/1";
         var database = edge.Database.OpenApp();
         var stale = new HostnameDirectory(database);
+        var originalId = await edge.Database.TenantIdAsync("alpha");
+        var newBindingSeen = false;
         await stale.RefreshAsync(default); // The receiver has not processed the later notification.
         var auth = new MeshAuthentication(edge.MeshKey, boot);
         var builder = WebApplication.CreateSlimBuilder();
@@ -361,8 +434,9 @@ public sealed partial class TenantReplicaTests
             var attempt = auth.Accept(context.Request)!;
             if (attempt.Purpose == "dispatch")
             {
+                if (attempt.TenantId != originalId) Volatile.Write(ref newBindingSeen, true);
                 if (context.Request.Path == "/held") Interlocked.Increment(ref dispatches);
-                Assert.Equal("alpha", await stale.ResolveAsync(context.Request.Host.Host, default));
+                Assert.Equal(new HostTenant("alpha", originalId), await stale.ResolveAsync(context.Request.Host.Host, default));
                 await context.Response.WriteAsync("stale owner");
                 return;
             }
@@ -370,7 +444,12 @@ public sealed partial class TenantReplicaTests
             {
                 Interlocked.Increment(ref activations);
                 await edge.Database.TakeLeaseAsync(await edge.Database.TenantIdAsync("alpha"), boot);
-                await edge.Database.ExecuteOwnerAsync(reassigned
+                if (change == "recreate")
+                {
+                    await ReplaceAlphaAsync(edge.Database);
+                    await edge.Database.TakeLeaseAsync(await edge.Database.TenantIdAsync("alpha"), boot);
+                }
+                else await edge.Database.ExecuteOwnerAsync(change == "reassign"
                     ? "UPDATE tenant_hostnames SET kind='custom',tenant_id=(SELECT tenant_id FROM tenants WHERE name='beta') WHERE hostname='alpha.test';"
                     : "DELETE FROM tenant_hostnames WHERE hostname='alpha.test';");
                 // Probe the very same cached authority. Another name can miss the cache and see
@@ -378,7 +457,8 @@ public sealed partial class TenantReplicaTests
                 await UntilAsync(async () =>
                 {
                     using var probe = await edge.GetAsync("alpha");
-                    return reassigned ? (await probe.Content.ReadAsStringAsync()).StartsWith("beta:", StringComparison.Ordinal)
+                    if (change == "recreate") return Volatile.Read(ref newBindingSeen);
+                    return change == "reassign" ? (await probe.Content.ReadAsStringAsync()).StartsWith("beta:", StringComparison.Ordinal)
                         : probe.StatusCode == HttpStatusCode.NotFound;
                 }, "edge observed the original binding change");
                 changeObserved.SetResult();
@@ -395,7 +475,7 @@ public sealed partial class TenantReplicaTests
         using var result = await edge.GetAsync("alpha", "/held");
         await changeObserved.Task.WaitAsync(TimeSpan.FromSeconds(12));
         Assert.Equal(1, activations);
-        Assert.Equal("alpha", await stale.ResolveAsync("alpha.test", default));
+        Assert.Equal(new HostTenant("alpha", originalId), await stale.ResolveAsync("alpha.test", default));
         Assert.Equal(HttpStatusCode.NotFound, result.StatusCode);
         Assert.Equal(0, dispatches);
     }

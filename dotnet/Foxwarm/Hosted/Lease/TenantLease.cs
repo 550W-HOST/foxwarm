@@ -195,7 +195,8 @@ internal sealed class TenantLease
         TimeSpan lockTimeout,
         CancellationToken token,
         TimeSpan? autonomousLead = null,
-        CancellationToken processStop = default
+        CancellationToken processStop = default,
+        int? expectedTenantId = null
     )
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
@@ -216,16 +217,20 @@ internal sealed class TenantLease
             });
             await timeout.ExecuteScalarAsync(token).ConfigureAwait(false);
         }
+        int lockedTenantId;
         try
         {
             await using (var locking = new NpgsqlCommand(
-                "SELECT 1 FROM tenant_leases l JOIN tenants t USING (tenant_id) WHERE t.name = $1 FOR UPDATE OF l",
+                "SELECT l.tenant_id FROM tenant_leases l JOIN tenants t USING (tenant_id) WHERE t.name = $1 FOR UPDATE OF l",
                 connection,
                 transaction
             ))
             {
                 locking.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
-                await locking.ExecuteScalarAsync(token).ConfigureAwait(false);
+                if (await locking.ExecuteScalarAsync(token).ConfigureAwait(false) is not int lockedId
+                    || expectedTenantId is not null && expectedTenantId != lockedId)
+                    return null;
+                lockedTenantId = lockedId;
             }
         }
         catch (PostgresException error) when (error.SqlState == "55P03")
@@ -256,7 +261,7 @@ internal sealed class TenantLease
         await using var update = new NpgsqlCommand(
             "UPDATE tenant_leases l SET owner_replica = $2, requested_action = NULL, epoch = l.epoch + 1, state = 'active',"
                 + " acquired_at = now(), expires_at = now() + make_interval(secs => $3), draining_since = NULL"
-                + " FROM tenants t WHERE t.tenant_id = l.tenant_id AND t.name = $1"
+                + " FROM tenants t WHERE t.tenant_id = l.tenant_id AND t.name = $1 AND l.tenant_id = $4"
                 + " RETURNING l.tenant_id, l.epoch, t.settings_revision, t.credential_version, t.limits->>'dbStatements'",
             connection,
             transaction
@@ -264,6 +269,7 @@ internal sealed class TenantLease
         update.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Tenant });
         update.Parameters.Add(new NpgsqlParameter<string> { TypedValue = replica });
         update.Parameters.Add(new NpgsqlParameter<double> { TypedValue = ttl.TotalSeconds });
+        update.Parameters.Add(new NpgsqlParameter<int> { TypedValue = lockedTenantId });
         int tenantId;
         long epoch, revision, credentialVersion;
         int? dbStatements;

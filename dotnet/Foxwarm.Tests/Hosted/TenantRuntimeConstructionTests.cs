@@ -224,8 +224,8 @@ public sealed class HostnameDirectoryTests
             );
             directory.Invalidate();
         };
-        Assert.Equal("new", await directory.ResolveAsync("shop.test", CancellationToken.None));
-        Assert.Equal("new", await directory.ResolveAsync("SHOP.test", CancellationToken.None));
+        Assert.Equal("new", (await directory.ResolveAsync("shop.test", CancellationToken.None))?.Slug);
+        Assert.Equal("new", (await directory.ResolveAsync("SHOP.test", CancellationToken.None))?.Slug);
     }
 
     [Fact]

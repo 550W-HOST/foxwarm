@@ -695,8 +695,10 @@ internal sealed class TenantReplica
     }
 }
 
+internal sealed record HostTenant(string Slug, int Id);
+
 /// <summary>
-/// The front's hostname lookup: <c>Host</c>, lowercased and without the port, to a tenant slug
+/// The front's hostname lookup: <c>Host</c>, lowercased and without the port, to its tenant ID and slug
 /// through <c>tenant_hostnames</c>. Cached briefly and cleared on <c>NOTIFY foxwarm_tenants</c>;
 /// a clear starts a new generation, and a lookup that began in an older one is neither cached
 /// nor trusted: it is repeated. Expired entries are evicted, and entries for unknown hosts are
@@ -711,7 +713,7 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
 
     private readonly Func<long> clock = clock ?? (() => Environment.TickCount64);
     private readonly object gate = new();
-    private readonly Dictionary<string, (string? Tenant, long Expires)> cache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (HostTenant? Tenant, long Expires)> cache = new(StringComparer.Ordinal);
     private long generation;
     private int negative;
 
@@ -741,12 +743,12 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
     {
         long started;
         lock (gate) started = generation;
-        var positive = new Dictionary<string, string>(StringComparer.Ordinal);
+        var positive = new Dictionary<string, HostTenant>(StringComparer.Ordinal);
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
-        await using var command = new Npgsql.NpgsqlCommand("SELECT h.hostname,t.name FROM tenant_hostnames h JOIN tenants t USING (tenant_id)", connection);
+        await using var command = new Npgsql.NpgsqlCommand("SELECT h.hostname,t.name,t.tenant_id FROM tenant_hostnames h JOIN tenants t USING (tenant_id)", connection);
         await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
         while (await reader.ReadAsync(token).ConfigureAwait(false))
-            positive.Add(reader.GetString(0), reader.GetString(1));
+            positive.Add(reader.GetString(0), new(reader.GetString(1), reader.GetInt32(2)));
         lock (gate)
         {
             if (generation != started) return;
@@ -758,7 +760,7 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
         }
     }
 
-    internal async Task<string?> ResolveAsync(string host, CancellationToken token)
+    internal async Task<HostTenant?> ResolveAsync(string host, CancellationToken token)
     {
         var key = (host.EndsWith('.') ? host[..^1] : host).ToLowerInvariant();
         while (true)
@@ -796,7 +798,7 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
         }
     }
 
-    private void Remove(string key, (string? Tenant, long Expires) entry)
+    private void Remove(string key, (HostTenant? Tenant, long Expires) entry)
     {
         cache.Remove(key);
         if (entry.Tenant is null)
@@ -813,14 +815,15 @@ internal sealed class HostnameDirectory(PgDatabase database, Func<long>? clock =
             Remove(key, entry);
     }
 
-    private async Task<string?> QueryAsync(string key, CancellationToken token)
+    private async Task<HostTenant?> QueryAsync(string key, CancellationToken token)
     {
         await using var connection = await database.OpenAsync(token).ConfigureAwait(false);
         await using var command = new Npgsql.NpgsqlCommand(
-            "SELECT t.name FROM tenant_hostnames h JOIN tenants t USING (tenant_id) WHERE h.hostname = $1",
+            "SELECT t.name,t.tenant_id FROM tenant_hostnames h JOIN tenants t USING (tenant_id) WHERE h.hostname = $1",
             connection
         );
         command.Parameters.Add(new Npgsql.NpgsqlParameter<string> { TypedValue = key });
-        return await command.ExecuteScalarAsync(token).ConfigureAwait(false) as string;
+        await using var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        return await reader.ReadAsync(token).ConfigureAwait(false) ? new(reader.GetString(0), reader.GetInt32(1)) : null;
     }
 }

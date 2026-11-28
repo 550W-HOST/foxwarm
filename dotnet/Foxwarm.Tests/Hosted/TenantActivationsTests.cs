@@ -294,22 +294,24 @@ public sealed partial class TenantActivationsTests
         var starting = owner.ActivateAsync(Tenant);
         await f.FactoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var epoch = await f.EpochAsync();
-        Assert.Null(owner.TryAdmitExact(Tenant, epoch, Replica));
+        var id = await f.Database.TenantIdAsync(Tenant);
+        Assert.Null(owner.TryAdmitExact(Tenant, id, epoch, Replica));
         f.StartGate.SetResult();
         var generation = await starting;
-        Assert.Null(owner.TryAdmitExact(Second, epoch, Replica));
-        Assert.Null(owner.TryAdmitExact(Tenant, epoch, "another-boot"));
-        Assert.Null(owner.TryAdmitExact(Tenant, epoch - 1, Replica));
-        Assert.Null(owner.TryAdmitExact(Tenant, epoch + 1, Replica));
+        Assert.Null(owner.TryAdmitExact(Second, id, epoch, Replica));
+        Assert.Null(owner.TryAdmitExact(Tenant, id + 1, epoch, Replica));
+        Assert.Null(owner.TryAdmitExact(Tenant, id, epoch, "another-boot"));
+        Assert.Null(owner.TryAdmitExact(Tenant, id, epoch - 1, Replica));
+        Assert.Null(owner.TryAdmitExact(Tenant, id, epoch + 1, Replica));
         Assert.Equal(0, generation.Gate.InFlight);
-        var exact = owner.TryAdmitExact(Tenant, epoch, Replica);
+        var exact = owner.TryAdmitExact(Tenant, id, epoch, Replica);
         Assert.NotNull(exact);
         using (exact.Value.Admission)
         {
             Assert.Same(generation, exact.Value.Generation);
             Assert.Equal(1, generation.Gate.InFlight);
             generation.Gate.Latch(AdmissionLatch.Drain);
-            Assert.Null(owner.TryAdmitExact(Tenant, epoch, Replica));
+            Assert.Null(owner.TryAdmitExact(Tenant, id, epoch, Replica));
         }
         Assert.Equal(0, generation.Gate.InFlight);
         Assert.Equal(1, f.Builds);
