@@ -194,7 +194,10 @@ internal sealed class MainHost : IAsyncDisposable
                 sessions.EnableScheduledProducers(schedule);
             await sessions.LoadMainHostAsync();
             if (capabilities.MainTerminalsAndCode)
+            {
                 terminals = new TerminalRegistry(dataRoot, CancellationToken.None);
+                sessions.LocalTerminals = terminals;
+            }
             var runtime = new SessionRuntime(sessions);
             var router = new MessageRouter(runtime);
             sessions.InitializeChannels(router, configuration, channelDependencies);

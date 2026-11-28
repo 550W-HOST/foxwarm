@@ -29,6 +29,8 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
         );
     }
 
+    internal bool HasLiveShells => !records.IsEmpty;
+
     internal static bool IsSupported => TerminalNative.IsSupported;
 
     internal async Task<TerminalRecord> CreateAsync(
