@@ -110,18 +110,28 @@ internal sealed partial class OperatorStore(PgDatabase database, KeyEncryptionKe
 
     private static async Task RequireCurrentReplicas(PgTx tx, CancellationToken ct)
     {
-        if (await HasOlderOwnerAsync(tx, 1200, ct))
+        if (await Scalar(tx, IncompatibleServingOwners + " LIMIT 1", ct, 1200) is int)
             throw new OperatorProblem(409, "Finish upgrading all live replicas before creating a tenant or rotating its access token.");
     }
 
     private static async Task RequireLifecycleReplicasAsync(PgTx tx, CancellationToken ct)
     {
-        if (await HasOlderOwnerAsync(tx, 1201, ct))
+        const string incompatible = """
+            SELECT 1 FROM replicas WHERE binary_level<$1 AND heartbeat_at>clock_timestamp()-make_interval(secs=>$2)
+            UNION ALL
+            """ + "\n" + IncompatibleServingOwners + " LIMIT 1";
+        if (await Scalar(tx, incompatible, ct, 1201, Lease.LeaseTimings.Default.Ttl.TotalSeconds) is int)
             throw new OperatorProblem(409, "Finish upgrading all live replicas before suspending or deleting a tenant.");
     }
 
-    private static async Task<bool> HasOlderOwnerAsync(PgTx tx, int requiredLevel, CancellationToken ct) =>
-        await Scalar(tx, "SELECT 1 FROM tenant_leases l LEFT JOIN replicas r ON r.replica_id=l.owner_replica WHERE l.state='active' AND l.expires_at>clock_timestamp() AND (r.binary_level IS NULL OR r.binary_level<$1) LIMIT 1", ct, requiredLevel) is int;
+    // Lease expiry is independent of heartbeat freshness. Imports use an unregistered
+    // migration-role lease, but neither import state can serve tenant requests.
+    private const string IncompatibleServingOwners = """
+        SELECT 1 FROM tenant_leases l JOIN tenants t USING(tenant_id)
+        LEFT JOIN replicas r ON r.replica_id=l.owner_replica
+        WHERE l.state='active' AND l.expires_at>clock_timestamp() AND t.state NOT IN ('importing','importing-agents')
+            AND (r.binary_level IS NULL OR r.binary_level<$1)
+        """;
 
     private static async Task<string> IssueSetupAsync(PgTx tx, int id, long version, CancellationToken ct)
     {

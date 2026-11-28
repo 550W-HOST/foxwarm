@@ -19,6 +19,62 @@ public sealed class OperatorObjectDeletionTests
             await Task.Delay(100, timeout.Token);
     }
 
+    [Fact]
+    public async Task A_changed_destination_forgets_only_its_receipt_while_a_missing_bucket_remains_pending()
+    {
+        var server = await S3Server.SharedAsync();
+        await using var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
+        using var root = new TempDirectory();
+        var config = new S3BlobSettings(
+            server.Endpoint,
+            S3Server.Region,
+            S3Server.NewBucketName(),
+            true,
+            Path.Combine(root.Path, "access"),
+            Path.Combine(root.Path, "secret")
+        );
+        await File.WriteAllTextAsync(config.AccessKeyIdFile, server.AccessKey);
+        await File.WriteAllTextAsync(config.SecretAccessKeyFile, server.SecretKey);
+        await using var op = new PgDatabase(db.OperatorConnectionString, "receipt-test");
+        var store = new OperatorStore(
+            op,
+            KeyEncryptionKey.From(InstanceKeys.OpenOrCreate(Path.Combine(root.Path, "kek"))),
+            config
+        );
+        // IDs order the due page. The first destination matches but its bucket does not
+        // exist. Neither the former bucket nor the former endpoint should be contacted.
+        await db.OpenOwner()
+            .ClusterAsync(
+                (tx, ct) =>
+                    tx.ExecuteAsync(
+                        """
+                        INSERT INTO operator_object_receipts(tenant_id,slug,object_identity,endpoint,bucket,recheck_after)
+                        VALUES (1,'first','namespace-1',$1,$2,now()),(2,'second','namespace-2',$1,'old-bucket',now()),
+                               (3,'third','namespace-3','https://former.example.invalid/',$2,now())
+                        """,
+                        ct,
+                        config.Endpoint.AbsoluteUri,
+                        config.Bucket
+                    ),
+                default
+            );
+        using var stop = new CancellationTokenSource();
+        var worker = store.RunDeletionLoopAsync(stop.Token);
+        try
+        {
+            await Until(async () => (await store.ReadReceiptsAsync(default)).AsArray().Count == 1);
+        }
+        finally
+        {
+            stop.Cancel();
+            await worker;
+        }
+        Assert.Equal(
+            1,
+            (int)Assert.Single((await store.ReadReceiptsAsync(default)).AsArray())!["tenantId"]!
+        );
+    }
+
     [Theory]
     [InlineData("off")]
     [InlineData("suspended")]

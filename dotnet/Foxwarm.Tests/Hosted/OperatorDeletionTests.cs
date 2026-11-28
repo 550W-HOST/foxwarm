@@ -43,6 +43,58 @@ public sealed class OperatorDeletionTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_live_old_standby_blocks_lifecycle_but_an_unregistered_import_does_not(
+        bool agentsOnly
+    )
+    {
+        await using var f = await Fixture.Create();
+        var store = f.Store;
+        await store.CreateAsync("offline", "hosted", "offline.test", default);
+        await store.SuspendAsync("offline", default);
+        await store.CreateAsync("online", "hosted", "online.test", default);
+        await f.Db.RegisterBootsAsync("standby");
+        await f.Db.ExecuteOwnerAsync(
+            "UPDATE replicas SET binary_level=1200 WHERE replica_id='standby'"
+        );
+        Assert.Equal(
+            409,
+            (
+                await Assert.ThrowsAsync<OperatorProblem>(() =>
+                    store.SuspendAsync("online", default)
+                )
+            ).Status
+        );
+        Assert.Equal(
+            409,
+            (
+                await Assert.ThrowsAsync<OperatorProblem>(() =>
+                    store.DeleteAsync("offline", default)
+                )
+            ).Status
+        );
+        await f.Db.ExecuteOwnerAsync(
+            "UPDATE replicas SET heartbeat_at=now()-interval '1 hour' WHERE replica_id='standby'"
+        );
+        var importer = new TenantLease(f.Db.OpenOwner(), PostgresServer.Tenant, 2);
+        var grant = Assert.IsType<LeaseGrant>(
+            await importer.TryAcquireForImportAsync(
+                "import:test",
+                0,
+                TimeSpan.FromMinutes(1),
+                TimeSpan.FromSeconds(1),
+                default,
+                agentsOnly ? ImportKind.Agents : ImportKind.Full,
+                agentsOnly ? "{}" : null
+            )
+        );
+        Assert.Equal("suspended", (string?)(await store.SuspendAsync("online", default))["state"]);
+        Assert.Equal("deleting", (string?)(await store.DeleteAsync("offline", default))["state"]);
+        Assert.True(await importer.RenewAsync(grant, TimeSpan.FromMinutes(1), default));
+    }
+
     [Fact]
     public async Task Lifecycle_requires_1201_and_a_replacement_operator_enforces_a_committed_suspend()
     {

@@ -66,9 +66,22 @@ internal sealed partial class OperatorStore
                         || deletionS3.Bucket != row.Bucket
                         || deletionS3.Endpoint.AbsoluteUri != row.Endpoint
                     )
-                        throw new IOException(
-                            "The receipt’s S3 destination is no longer configured."
+                    {
+                        var removed = await database.ClusterAsync(
+                            (tx, token) =>
+                                tx.ExecuteAsync(
+                                    "DELETE FROM operator_object_receipts WHERE tenant_id=$1",
+                                    token,
+                                    row.Id
+                                ),
+                            ct
                         );
+                        if (removed == 1)
+                            Console.Error.WriteLine(
+                                $"[operator] Warning: namespace {row.Identity} (tenant {row.Id}) at endpoint {row.Endpoint}, bucket {row.Bucket}, was not checked because the storage destination changed. The receipt was discarded."
+                            );
+                        continue;
+                    }
                     if (
                         await cursor.SweepAsync(
                             deletionS3,
