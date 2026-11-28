@@ -16,6 +16,8 @@ public sealed partial class WakeupLifecycleTests
         internal required HostedTestDatabase Db;
         internal required TenantReplica Replica;
         internal MainHostRuntime Current = null!;
+        internal Func<TenantRuntimeContext, Task>? BeforeBuild;
+        internal readonly System.Collections.Concurrent.ConcurrentQueue<string> Logs = new();
         internal CancellationTokenSource Stop = new();
         internal TempDirectory Temp = new();
         private Task serving = null!;
@@ -35,7 +37,10 @@ public sealed partial class WakeupLifecycleTests
             { Role = master ? ReplicaRoles.MasterHost : ReplicaRoles.General,
                 Mesh = new(new(IPAddress.Loopback,0),"127.0.0.1",System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)) },
                 db.OpenApp(), db.AppConnectionString, async (context,ct) =>
-                    live.Current = (MainHostRuntime)await HostedEntry.CreateTenantRuntimeAsync(context,bootstrap,config,ct), _ => {},
+                {
+                    if (live.BeforeBuild is { } before) await before(context);
+                    return live.Current = (MainHostRuntime)await HostedEntry.CreateTenantRuntimeAsync(context,bootstrap,config,ct);
+                }, line => live.Logs.Enqueue(line),
                 code => throw new InvalidOperationException("Unexpected exit " + code));
             live = new LiveReplica { Db=db, Replica=replica };
             var kek = Path.Combine(live.Temp.Path,"kek","current.key");
