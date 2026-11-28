@@ -62,6 +62,7 @@ export async function composeEnvironment() {
 
   const environment = {
     name: 'compose',
+    masterAgents: '/master',
     root,
     slots,
     tenant: 'default',
@@ -97,6 +98,18 @@ export async function composeEnvironment() {
     async token({ tenant } = {}) {
       const slot = slots.find(item => running.get(item))
       return await compose(['exec', '-T', service(slot), '/app/Foxwarm', 'hosted', 'token', ...(tenant ? ['--tenant', tenant] : [])])
+    },
+
+    tryGeneralForOperator(tenant) {
+      return compose(['run', '--rm', '--no-deps', '-e', `FOXWARM_TENANT=${tenant}`, 'foxwarm-3'])
+    },
+
+    async startMaster() {
+      await must(['up', '-d', '--no-deps', 'foxwarm-master'])
+      return { url: `http://${await address('foxwarm-master')}:3001`, stop: async () => {
+        await must(['stop', '-t', '30', 'foxwarm-master'])
+        if (Number(await inspect('foxwarm-master', '{{.State.ExitCode}}')) !== 0) throw new Error('master-host exited uncleanly')
+      } }
     },
 
     async start(slot, { version = 'N' } = {}) {
@@ -234,7 +247,7 @@ export async function composeEnvironment() {
       console.log((await compose(['ps', '-a'])).stdout)
       if (keep) {
         // A failed run: the other services' logs, for the CI log.
-        for (const name of ['postgres', 'versitygw', 'proxy', 'mock-llm', 'file-source', 'foxwarm-imported'])
+        for (const name of ['postgres', 'versitygw', 'proxy', 'mock-llm', 'file-source', 'foxwarm-imported', 'foxwarm-master'])
           console.log(`--- logs of ${name}\n` + (await compose(['logs', '--no-color', '--tail', '60', name])).stdout)
       }
       if (!keep) {

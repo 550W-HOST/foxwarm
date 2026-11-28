@@ -52,6 +52,7 @@ export async function processEnvironment(options = {}) {
 
   const environment = {
     name: 'process',
+    masterAgents: join(root, 'master'),
     root,
     binary,
     slots,
@@ -217,6 +218,29 @@ export async function processEnvironment(options = {}) {
           return await exited
         },
       }
+    },
+
+    async tryGeneralForOperator(tenant) {
+      // A third IP on this process test's loopback network leaves the serving ports alone.
+      return environment.cli([], {...environment.replicaEnv('r3'), FOXWARM_TENANT: tenant})
+    },
+
+    async startMaster() {
+      const host = '127.0.0.31'
+      const deployment = join(root, 'deployment-master.yaml')
+      writeFileSync(deployment, readFileSync(environment.deployment('r1'), 'utf8').replace(address('r1'), host))
+      mkdirSync(environment.masterAgents, { recursive: true })
+      const child = background('master-host', binary, [], {
+        ...environment.replicaEnv('r1'), FOXWARM_HOSTED_TOPOLOGY: 'tenants', FOXWARM_ROLE: 'master-host',
+        FOXWARM_REPLICA_ID: 'foxwarm-master', FOXWARM_ADVERTISE_ADDRESS: `${host}:${publicPort}`,
+        FOXWARM_AGENTS_DIR: environment.masterAgents, FOXWARM_SCRATCH_DIR: join(root, 'master', 'scratch'),
+        FOXWARM_DEPLOYMENT_CONFIG: deployment,
+      })
+      const exited = new Promise(resolve => child.once('exit', code => resolve(code)))
+      return { url: `http://${host}:${publicPort}`, stop: async () => {
+        child.kill('SIGTERM')
+        if (await exited !== 0) throw new Error('master-host exited uncleanly')
+      } }
     },
 
     async start(slot, { version = 'N', tenant } = {}) {
