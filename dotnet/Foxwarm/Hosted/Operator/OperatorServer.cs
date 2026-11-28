@@ -83,28 +83,51 @@ internal static class OperatorServer
             server.AddServerHeader = false;
         });
         await using var app = builder.Build();
-        app.Run(context => Dispatch(context, store, listener));
+        var dist = HttpAssets.WebUiDirectory(HostPaths.Capture());
+        var assets = dist is null ? null : new HttpAssets(System.IO.Path.GetDirectoryName(dist)!);
+        var console = System.IO.Path.GetFileName(dist) + "/operator/";
+        app.Run(context => Dispatch(context, store, listener, assets, console));
         await app.StartAsync(token);
         var cleanup = store.RunDeletionLoopAsync(app.Lifetime.ApplicationStopping);
         try { await app.WaitForShutdownAsync(token); }
         finally { await cleanup; }
     }
 
-    internal static async Task Dispatch(HttpContext context, OperatorStore store, OperatorListener listener)
+    internal static async Task Dispatch(HttpContext context, OperatorStore store, OperatorListener listener, HttpAssets? assets = null, string? consolePrefix = null)
     {
         var request = context.Request;
         var response = context.Response;
         var ct = context.RequestAborted;
         response.Headers.CacheControl = "no-store";
         if (OperatorListener.CanonicalHost(request.Host.Host) != listener.Host
-            || (request.Host.Port ?? (listener.Origin.Scheme == "https" ? 443 : 80)) != listener.Origin.Port
-            || !request.Path.StartsWithSegments(Path, out var remaining))
+            || (request.Host.Port ?? (listener.Origin.Scheme == "https" ? 443 : 80)) != listener.Origin.Port)
         {
             response.StatusCode = 404;
             return;
         }
+        if (!request.Path.StartsWithSegments(Path, out var remaining))
+        {
+            var file = request.Path.Value switch
+            {
+                "/" => "index.html",
+                "/operator/console.js" => "console.js",
+                "/operator/console.css" => "console.css",
+                _ => null,
+            };
+            if (file is null || assets is null || request.Method is not ("GET" or "HEAD"))
+                response.StatusCode = 404;
+            else
+            {
+                response.Headers.ContentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+                response.Headers["Referrer-Policy"] = "no-referrer";
+                response.Headers.XContentTypeOptions = "nosniff";
+                await assets.ServeAsync(context, consolePrefix + file);
+            }
+            return;
+        }
         var segments = (remaining.Value ?? "").Trim('/').Split('/');
-        if ((request.Method, segments) is not ("GET", ["placement"] or ["deletions"] or ["tenants"] or ["tenants", _] or ["profiles", _, "ceiling"])
+        var grantRoute = segments is ["tenants", _, "provider-grants"] && request.Method is "GET" or "PUT" or "DELETE";
+        if (!grantRoute && (request.Method, segments) is not ("GET", ["placement"] or ["deletions"] or ["tenants"] or ["tenants", _] or ["profiles", _, "ceiling"])
             and not ("POST", ["tenants"] or ["tenants", _, "rotate" or "suspend" or "resume"]) and not ("DELETE", ["tenants", _]) and not ("PATCH", ["tenants", _]) and not ("PUT", ["profiles", _, "ceiling"]))
         {
             response.StatusCode = 404;
@@ -125,6 +148,13 @@ internal static class OperatorServer
             switch (request.Method, segments)
             {
                 case ("GET", ["deletions"]): result = await store.ReadReceiptsAsync(ct); break;
+                case ("GET", ["tenants", var slug, "provider-grants"]): result = await store.ReadGrantsAsync(slug, ct); break;
+                case ("PUT" or "DELETE", ["tenants", var slug, "provider-grants"]):
+                    var ids = request.Query["providerId"];
+                    if (ids.Count != 1 || string.IsNullOrEmpty(ids[0])) throw new OperatorProblem(400, "Supply one Provider ID.");
+                    result = await store.ChangeGrantAsync(slug, ids[0]!, request.Method == "PUT" ? await Body(request, ct) : null,
+                        new Providers.ProviderGrants(listener.Deployment), ct);
+                    break;
                 case ("GET", ["placement"]): result = await store.PlacementAsync(ct); break;
                 case ("GET", ["tenants"]): result = await store.ReadAsync(null, ct); break;
                 case ("GET", ["tenants", var slug]): result = await store.ReadAsync(slug, ct); break;

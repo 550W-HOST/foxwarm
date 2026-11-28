@@ -18,6 +18,7 @@ internal static class OperatorCli
           tenants | placement | deletions
           tenant create SLUG PROFILE HOSTNAME | tenant get SLUG | tenant rotate SLUG | tenant set SLUG JSON-FILE
           tenant suspend SLUG | tenant resume SLUG | tenant delete SLUG
+          grants list SLUG | grants set SLUG PROVIDER QUOTAS-FILE | grants remove SLUG PROVIDER
           ceiling get PROFILE | ceiling set PROFILE JSON-FILE
         """;
 
@@ -75,6 +76,9 @@ internal static class OperatorCli
             ["tenant", "resume", var slug] => (HttpMethod.Post, Tenant(slug) + "/resume", null),
             ["tenant", "delete", var slug] => (HttpMethod.Delete, Tenant(slug), null),
             ["deletions"] => (HttpMethod.Get, "/deletions", null),
+            ["grants", "list", var slug] => (HttpMethod.Get, Tenant(slug) + "/provider-grants", null),
+            ["grants", "set", var slug, var id, var file] => (HttpMethod.Put, Tenant(slug) + "/provider-grants?providerId=" + Uri.EscapeDataString(id), await File.ReadAllTextAsync(file, token)),
+            ["grants", "remove", var slug, var id] => (HttpMethod.Delete, Tenant(slug) + "/provider-grants?providerId=" + Uri.EscapeDataString(id), null),
             ["placement"] => (HttpMethod.Get, "/placement", null),
             ["ceiling", "get", var profile] => (HttpMethod.Get, Ceiling(profile), null),
             ["ceiling", "set", var profile, var file] => (HttpMethod.Put, Ceiling(profile), await File.ReadAllTextAsync(file, token)),

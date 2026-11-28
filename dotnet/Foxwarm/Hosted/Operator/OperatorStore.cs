@@ -201,11 +201,15 @@ internal sealed partial class OperatorStore(PgDatabase database, KeyEncryptionKe
         JsonNode.Parse((string)(await Scalar(tx, """
             SELECT jsonb_build_object('tenants', (SELECT coalesce(jsonb_agg(jsonb_build_object('slug',t.name,'epoch',l.epoch,
                 'owner',CASE WHEN live THEN l.owner_replica END,'leaseAgeSeconds',CASE WHEN live THEN extract(epoch FROM now()-l.acquired_at) END,
-                'hot',CASE WHEN live AND sample->'epoch'=to_jsonb(l.epoch) THEN sample->'hot' END,
-                'busy',CASE WHEN live AND sample->'epoch'=to_jsonb(l.epoch) THEN sample->'busy' END) ORDER BY t.name),'[]')
+                'hot',sample->'hot',
+                'busy',sample->'busy',
+                'providerProblems',sample->'providerProblems') ORDER BY t.name),'[]')
                 FROM tenants t JOIN tenant_leases l USING(tenant_id) LEFT JOIN replicas r ON r.replica_id=l.owner_replica,
-                LATERAL (SELECT l.state='active' AND l.expires_at>now() AS live, r.capacity->'tenants'->t.name AS sample) stats),
+                LATERAL (SELECT l.state='active' AND l.expires_at>now() AS live, r.capacity->'tenants'->t.name AS heartbeat) stats,
+                LATERAL (SELECT CASE WHEN live AND r.heartbeat_at>now()-make_interval(secs=>$1)
+                    AND heartbeat->'tenantId'=to_jsonb(t.tenant_id) AND heartbeat->'epoch'=to_jsonb(l.epoch)
+                    THEN heartbeat END AS sample) observation),
                 'replicas',(SELECT coalesce(jsonb_agg(jsonb_build_object('id',replica_id,'name',name,'role',role,'version',capacity->>'version','binaryLevel',binary_level,
                     'readerVersion',reader_version,'capacity',capacity-'tenants','draining',draining,'heartbeatAt',heartbeat_at) ORDER BY replica_id),'[]') FROM replicas))::text
-            """, ct))!)!, token);
+            """, ct, Lease.LeaseTimings.Default.Ttl.TotalSeconds))!)!, token);
 }

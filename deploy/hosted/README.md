@@ -69,6 +69,10 @@ foxwarm operator --url https://control.example.net --token-file operator.token t
 
 Give the returned setup token to the tenant administrator. It expires in 24 hours. The first sign-in on the tenant's own origin shows the access token to save. On a multi-tenant replica, `tenant rotate alpha` invalidates the earlier credential once the owner observes the change (normally by the next five-second renewal) and issues another one-time token. See [the operator API](../../docs/code-index/units/hosted-operator.md) for settings, placement and rotation.
 
+Open the operator origin in a browser and sign in with the operator bearer to see tenants, their current owners and the registered replicas. Select a tenant to edit limits or journal recording and retention, or suspend and resume it. The console keeps the bearer in memory until sign-out or reload.
+
+Use `grants set SLUG PROVIDER QUOTAS-FILE` to give a tenant access to a configured Provider, `grants list SLUG` to see its explicit grants, and `grants remove SLUG PROVIDER` to remove one. For example, `{"nodes":5,"execs":2}` overrides the first two quotas and keeps the default 60 lifecycle actions per hour. A grant change refreshes that tenant's running generation on a multi-tenant (P2) replica. Single-tenant (P1) hosted replicas ignore grants and log `Provider grants aren't applied in single-tenant hosted mode.` A hosted tenant needs an explicit grant to a Provider declared `tenancy: per-tenant`. An operator-profile tenant can also use legacy Providers; removing an explicit grant for that profile restores access without grant quotas. Placement reports Provider description or tenancy problems from the current owner.
+
 Choose the Agent store at creation: hosted tenants use SQL Agent files, and the operator tenant uses Agent folders on the master host. `tenant set` refuses a profile edit that would switch stores.
 
 ### Suspend, resume and erase a tenant
