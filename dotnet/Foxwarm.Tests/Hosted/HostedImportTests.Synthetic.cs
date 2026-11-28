@@ -93,6 +93,7 @@ public sealed partial class HostedImportTests : IAsyncLifetime
         var importedFiles = verification["agentFiles"]!.AsArray();
         Assert.NotEmpty(importedFiles);
         Assert.All(importedFiles, file => Assert.True(file!["equal"]!.GetValue<bool>()));
+        Assert.DoesNotContain(result.Report["notImported"]!.AsArray(), item => item?["what"]?.ToString()=="state/channel-cursors.json");
         var exec = result.Report["notImported"]!.AsArray().Single(item => item!["what"]!.ToString().StartsWith("exec registry", StringComparison.Ordinal));
         Assert.Equal(1, exec!["count"]!.GetValue<long>());
     }

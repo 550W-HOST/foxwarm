@@ -173,14 +173,14 @@ internal sealed partial class MatrixChannel : IManagedChannel
         return SendEventAsync(room, content, token);
     }
 
+    private const string EncryptionUnsupported = "This room is configured to use encryption, but your client does not support encryption.";
+
     private Task SendEventAsync(string room, JsonObject content, CancellationToken token)
     {
         // The SDK refuses known encrypted rooms before adding the event to its send scheduler.
         if (encryptedRooms.ContainsKey(room))
             return Task.FromException(
-                new InvalidOperationException(
-                    "This room is configured to use encryption, but your client does not support encryption."
-                )
+                new InvalidOperationException(EncryptionUnsupported)
             );
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -216,6 +216,12 @@ internal sealed partial class MatrixChannel : IManagedChannel
             {
                 try
                 {
+                    // A replacement sender can already be registered while its predecessor
+                    // finishes the sync that recorded this room. Check again at dispatch,
+                    // including sends that waited in the scheduler or are being retried.
+                    if (cursors is not null) RestoreEncryption(await cursors.ReadAsync(id, Account));
+                    if (encryptedRooms.ContainsKey(room))
+                        throw new InvalidOperationException(EncryptionUnsupported);
                     await RequestAsync(
                         HttpMethod.Put,
                         "_matrix/client/v3/rooms/" + Encode(room) + "/send/m.room.message/" + txn,

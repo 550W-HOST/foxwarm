@@ -5,7 +5,7 @@ using Foxwarm.Storage;
 
 namespace Foxwarm.Tests;
 
-public sealed class ChannelCursorTests
+public sealed partial class ChannelCursorTests
 {
     [Fact]
     public async Task APolledInputAndItsReceiptCommitTogetherBeforeAcknowledgement()

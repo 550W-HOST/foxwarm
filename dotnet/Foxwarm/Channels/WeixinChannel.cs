@@ -84,7 +84,12 @@ internal sealed class WeixinChannel : IManagedChannel
     {
         stopped = true;
         // Source's outer-loop signal is not passed to fetch or its backoff delay.
-        if (polling is not null && !ReferenceEquals(handling.Value, this) && cursors?.StopPolling.IsCancellationRequested != true)
+        var caller = handling.Value;
+        // A handler can successively stop its own adapter and a replacement whose poll is
+        // queued behind it. Both are on the same installation/instance polling chain.
+        var self = ReferenceEquals(caller, this)
+            || cursors is not null && caller?.id == id && ReferenceEquals(caller.cursors, cursors);
+        if (polling is not null && !self && cursors?.StopPolling.IsCancellationRequested != true)
             await polling;
     }
 
@@ -92,8 +97,16 @@ internal sealed class WeixinChannel : IManagedChannel
 
     private async Task PollAsync()
     {
-        if (cursors is not null)
-            cursor = SessionWait.Text((await cursors.ReadAsync(id, account))?["get_updates_buf"]) ?? "";
+        try
+        {
+            if (cursors is not null)
+                cursor = SessionWait.Text((await cursors.ReadAsync(id, account))?["get_updates_buf"]) ?? "";
+        }
+        catch (Exception error)
+        {
+            health.Fail(PollingPath, error);
+            return; // A restart opens the cursor again after storage is repaired.
+        }
         var failures = 0;
         var shutdown = cursors?.StopPolling ?? default;
         while (!stopped && !shutdown.IsCancellationRequested)

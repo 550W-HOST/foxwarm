@@ -36,6 +36,7 @@ internal sealed partial class MessageRouter
             catch (Exception error)
             {
                 Console.Error.WriteLine("Channel guest provisioning failed: " + error.Message);
+                if (source.Polled) throw;
             }
             if (owner is null && !Authorization(source).Authorized)
             {
