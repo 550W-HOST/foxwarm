@@ -46,7 +46,7 @@ internal sealed class ReplicaPlacementRequests(PgDatabase database, LeaseTimings
         if (action == PlacementAction.Move)
         {
             var peers = await ReplicaRegistry.LiveAsync(tx, timings.Ttl, ct);
-            if (!Placement.Candidates(slug, profile, pin, peers, r => r.ReaderVersion >= floor).Any(r => r.Replica != expectedBoot && r.MeshAddress != null))
+            if (!Placement.Candidates(slug, profile, pin, peers, r => r.ReaderVersion >= floor && r.MeshAddress != null).Any(r => !r.Draining && r.Replica != expectedBoot))
                 return PlacementRequestResult.NoTarget;
         }
         var changed = await tx.ExecuteAsync("UPDATE tenant_leases SET requested_action=$2 WHERE tenant_id=$1 AND expires_at>clock_timestamp()", ct, expectedTenantId, value);

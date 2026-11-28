@@ -72,6 +72,22 @@ public sealed class PlacementRankTests
         Assert.Equal(["replica-c"], Placement.Candidates("alpha", TenantProfile.Hosted, null, live, row => row.Name == "replica-c").Select(row => row.Name));
     }
 
+    [Fact]
+    public void AdministrativeDrainIsLastResortAndStoppingBootsCannotAcquire()
+    {
+        var ready = Row("ready/1");
+        var drained = Row("drained/2", draining: true);
+        var stopped = Row("stopped/3", draining: true);
+        stopped.Capacity["stopping"] = true;
+        var live = new[] {ready, drained, stopped};
+        IReadOnlyList<ReplicaRow> Candidates() => Placement.Candidates("alpha", TenantProfile.Hosted, null, live);
+        Assert.Equal([ready], Candidates());
+        ready.Capacity["acceptingNew"] = false;
+        Assert.Equal([drained], Candidates());
+        drained.Capacity["acceptingNew"] = false;
+        Assert.Empty(Candidates());
+    }
+
     [Theory]
     [InlineData(ReplicaRoles.General, "hosted", null, true)]
     [InlineData(ReplicaRoles.General, "operator", null, false)]
@@ -90,6 +106,25 @@ public sealed class PlacementRankTests
 public sealed class PlacementAcquisitionTests
 {
     private const string Replica = "replica-a/0001";
+
+    [Fact]
+    public async Task DrainedReceiverRechecksItsFallbackTierBeforeTakingTheLease()
+    {
+        await using var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
+        var app = db.OpenApp();
+        var registry = new ReplicaRegistry(app);
+        foreach (var boot in new[] { "old/1", "peer/2" })
+            await registry.RegisterAsync(boot, null, Foxwarm.Hosted.Schema.SchemaMigrator.BinaryLevel, 2, default, meshAddress: "127.0.0.1:3201");
+        var lease = new TenantLease(app, PostgresServer.Tenant, 2);
+        Task<LeaseGrant?> Claim() => lease.TryAcquireAsync("old/1", TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1), default);
+        await db.ExecuteOwnerAsync("UPDATE replicas SET draining=true WHERE replica_id='old/1'");
+        Assert.Null(await Claim());
+        await db.ExecuteOwnerAsync("UPDATE replicas SET draining=true WHERE replica_id='peer/2'");
+        var grant = Assert.IsType<LeaseGrant>(await Claim());
+        await lease.ReleaseAsync(grant,default);
+        await db.ExecuteOwnerAsync("UPDATE replicas SET capacity=jsonb_build_object('stopping',true) WHERE replica_id='old/1'");
+        Assert.Null(await Claim());
+    }
 
     [Theory]
     [InlineData("'operator', NULL", "23514")]

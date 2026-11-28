@@ -86,7 +86,7 @@ internal sealed class TenantReplica
     // Runtimes built and not yet disposed, for operator-document invalidation.
     private readonly HashSet<TenantRuntime> live = [];
     private long operatorVersion;
-    private volatile string state = "starting";
+    private volatile bool administrativelyDraining;
     private TenantActivations? activations;
 
     /// <param name="operatorDocumentsChanged">
@@ -181,13 +181,13 @@ internal sealed class TenantReplica
         var registry = new ReplicaRegistry(control);
         var hostnames = new HostnameDirectory(app);
         using var router = new TenantRouter(Replica, new MeshAuthentication(options.Mesh.Secret, Replica),
-            new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, AcceptingNew, log);
-        var placement = new PlacementMaintenance(app, Replica, options, coordinator, router, () =>
-        {
-            if (state == "serving") state = "draining";
-        }, log);
+            new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, AcceptingNew, log, stop);
+        var placement = new PlacementMaintenance(app, Replica, options, coordinator, () => administrativelyDraining = true, log);
+        // Cancellation is the monotonic SIGTERM latch, including while callbacks are in flight.
+        string HealthState() => stop.IsCancellationRequested ? "stopping" : !serving.Task.IsCompletedSuccessfully
+            ? "starting" : administrativelyDraining ? "draining" : "serving";
         await using var health = options.HealthEndpoint is { } healthAddress
-            ? new HealthEndpoint(healthAddress, () => new TenantReplicaHealth(state, Replica, options.Role, coordinator.Published().Count))
+            ? new HealthEndpoint(healthAddress, () => new TenantReplicaHealth(HealthState(), Replica, options.Role, coordinator.Published().Count))
             : null;
         HealthPort = health?.Port;
         using var background = new CancellationTokenSource();
@@ -214,15 +214,12 @@ internal sealed class TenantReplica
             loops.Add(RefreshHostnamesAsync(hostnames, background.Token));
             await using var front = await StartListenerAsync(options.PublicEndpoint, mesh: false, router).ConfigureAwait(false);
             FrontPort = new Uri(front.Urls.Single()).Port;
-            state = "serving";
             serving.TrySetResult();
             try
             {
                 await Task.Delay(Timeout.Infinite, stop).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
-            state = "stopping";
-            router.Drain();
             // Tenants first: each refuses new dispatch as it latches, and the front answers.
             using var stopListeners = new CancellationTokenSource(options.ShutdownBound + options.MoveGrace);
             router.EndHoldsAfter(options.ShutdownBound + options.MoveGrace);

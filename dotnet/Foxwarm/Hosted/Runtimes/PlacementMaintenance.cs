@@ -8,7 +8,7 @@ namespace Foxwarm.Hosted.Runtimes;
 
 /// <summary>Consumes durable placement requests for this boot. A notification only shortens the next scan.</summary>
 internal sealed class PlacementMaintenance(PgDatabase database, string boot, TenantReplicaOptions options,
-    TenantActivations activations, TenantRouter router, Action draining, Action<string> log)
+    TenantActivations activations, Action draining, Action<string> log)
 {
     private readonly Channel<bool> signals = Channel.CreateBounded<bool>(1);
     private readonly RebalancePreference preferred = new(options.RebalanceCooldown);
@@ -54,7 +54,7 @@ internal sealed class PlacementMaintenance(PgDatabase database, string boot, Ten
     {
         var live = await ReplicaRegistry.LiveAsync(tx, options.Timings.Ttl, ct).ConfigureAwait(false);
         var source = live.FirstOrDefault(row => row.Replica == boot);
-        if (source?.Draining == true) { router.Drain(); draining(); }
+        if (source?.Draining == true) draining();
         var published = activations.Published().ToDictionary(g => g.Id.TenantId);
         preferred.KeepResidents(published.Keys);
         List<Retirement> work = [];
@@ -75,7 +75,7 @@ internal sealed class PlacementMaintenance(PgDatabase database, string boot, Ten
             if (generation.Id.Epoch != row.Epoch) continue;
             var candidates = Lease.Placement.Candidates(generation.Id.Tenant, row.Profile, row.Pin, live,
                 peer => peer.ReaderVersion >= row.Floor && peer.MeshAddress != null);
-            var alternative = candidates.FirstOrDefault(peer => peer.Replica != boot);
+            var alternative = candidates.FirstOrDefault(peer => !peer.Draining && peer.Replica != boot);
             var idleOnly = row.Action is null && source?.Draining != true;
             if (idleOnly)
             {
@@ -106,13 +106,13 @@ internal sealed class PlacementMaintenance(PgDatabase database, string boot, Ten
 
     // SIGTERM always retires. Publish all barriers together, keeping CH's normal settled
     // hand-back for tenants with no eligible alternative. Local gates close independently of DB I/O.
-    internal Task MarkStoppingAsync(CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
+    internal Task<HashSet<(int TenantId, long Epoch)>> MarkStoppingAsync(CancellationToken token) => database.ClusterAsync(async (tx, ct) =>
     {
-        await tx.ExecuteAsync("UPDATE replicas SET draining=true WHERE replica_id=$1", ct, boot);
+        await tx.ExecuteAsync("UPDATE replicas SET draining=true, capacity=capacity || jsonb_build_object('stopping',true) WHERE replica_id=$1", ct, boot);
         var live = await ReplicaRegistry.LiveAsync(tx, options.Timings.Ttl, ct);
-        List<int> moving = [];
+        HashSet<(int TenantId, long Epoch)> moving = [];
         await using (var command = tx.Command("""
-            SELECT t.tenant_id,t.name,t.profile,t.pinned_role,t.min_reader_version FROM tenants t JOIN tenant_leases l USING(tenant_id)
+            SELECT t.tenant_id,t.name,t.profile,t.pinned_role,t.min_reader_version,l.epoch FROM tenants t JOIN tenant_leases l USING(tenant_id)
             WHERE l.owner_replica=$1 AND l.state='active' AND l.expires_at>clock_timestamp() AND t.state='active'
             """, boot))
         await using (var rows = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
@@ -120,16 +120,17 @@ internal sealed class PlacementMaintenance(PgDatabase database, string boot, Ten
             {
                 var floor = rows.GetInt32(4);
                 if (Lease.Placement.Candidates(rows.GetString(1), TenantProfiles.Parse(rows.GetString(2)), rows.IsDBNull(3) ? null : rows.GetString(3), live,
-                    row => row.Replica != boot && row.ReaderVersion >= floor && row.MeshAddress != null).Count > 0)
-                    moving.Add(rows.GetInt32(0));
+                    row => !row.Draining && row.Replica != boot && row.ReaderVersion >= floor && row.MeshAddress != null).Count > 0)
+                    moving.Add((rows.GetInt32(0),rows.GetInt64(5)));
             }
-        return await tx.ExecuteAsync("""
+        await tx.ExecuteAsync("""
             WITH writable AS (SELECT tenant_id FROM tenant_leases WHERE owner_replica=$1 AND state='active'
                               ORDER BY tenant_id FOR NO KEY UPDATE SKIP LOCKED)
             UPDATE tenant_leases l SET draining_since=coalesce(draining_since,clock_timestamp()),
               requested_action=CASE WHEN l.tenant_id=ANY($2) THEN coalesce(requested_action,'move') ELSE requested_action END
             FROM tenants t JOIN writable w USING(tenant_id) WHERE l.owner_replica=$1 AND l.state='active' AND l.expires_at>clock_timestamp() AND t.tenant_id=l.tenant_id AND t.state='active'
-            """, ct, boot, moving.ToArray());
+            """, ct, boot, moving.Select(grant => grant.TenantId).ToArray());
+        return moving;
     }, token);
 }
 

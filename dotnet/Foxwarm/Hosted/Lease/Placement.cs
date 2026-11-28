@@ -51,7 +51,8 @@ internal static class Placement
 
     /// <summary>
     /// The candidates for a new placement of a tenant with this profile and pin, in rank order:
-    /// live boots whose role may serve it and that aren't draining. Two live boots with one
+    /// live boots whose role may serve it, preferring non-draining boots. Administratively
+    /// draining boots can host when every eligible boot is draining. A stopping process cannot. Two live boots with one
     /// logical name count as one: the older boot, so a restarted replica is ineligible until
     /// its predecessor's heartbeat expires. <paramref name="accepts"/> is the capacity filter;
     /// it applies to new placement only, never to an owner with a valid grant.
@@ -67,9 +68,10 @@ internal static class Placement
         var byName = live
             .GroupBy(row => row.Name, StringComparer.Ordinal)
             .Select(boots => boots.OrderBy(row => row.StartedAt).ThenBy(row => row.Replica, StringComparer.Ordinal).First())
-            .Where(row => !row.Draining && ReplicaRoles.MayServe(row.Role, profile, pinnedRole))
+            .Where(row => row.Capacity["stopping"]?.GetValue<bool>() != true && ReplicaRoles.MayServe(row.Role, profile, pinnedRole))
             .Where(row => row.Capacity["acceptingNew"]?.GetValue<bool>() != false && (accepts?.Invoke(row) ?? true))
             .ToDictionary(row => row.Name, StringComparer.Ordinal);
-        return [.. Rank(slug, byName.Keys).Select(name => byName[name])];
+        var preferred = byName.Values.Any(row => !row.Draining) ? byName.Values.Where(row => !row.Draining) : byName.Values;
+        return [.. Rank(slug, preferred.Select(row => row.Name)).Select(name => byName[name])];
     }
 }
