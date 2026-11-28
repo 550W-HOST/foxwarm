@@ -57,7 +57,17 @@ internal static class LeasedImport
                 return HostedImport.Failed;
             }
             cancel.Token.ThrowIfCancellationRequested();
-            await lease.ActivateImportAsync(grant, stop, kind, publish).ConfigureAwait(false);
+            try
+            {
+                await lease.ActivateImportAsync(grant, cancel.Token, kind, publish).ConfigureAwait(false);
+            }
+            catch (CommitOutcomeUnknownException error)
+            {
+                report.Outcome = "activation-unknown";
+                report.Root["tenant"]!["state"] = "unknown";
+                report.Root["error"] = error.Message;
+                return HostedImport.Failed;
+            }
             activated = true;
             report.Root["tenant"]!["state"] = "active";
             report.Outcome = "imported";

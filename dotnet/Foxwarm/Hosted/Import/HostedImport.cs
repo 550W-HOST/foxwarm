@@ -129,7 +129,8 @@ internal static class HostedImport
             if (string.IsNullOrEmpty(volume))
                 throw new ImportRefusedException(PhysicalAgentImport.MissingVolume);
             var lease = new TenantLease(database, tenant, AgentCatalog.ReaderVersion);
-            var deleted = await lease.AbandonOperatorImportAsync(id => PhysicalAgentImport.RemoveStaging(volume, id));
+            var physicalVolume = PhysicalAgentImport.RequireVolume(volume, forPublication: false);
+            var deleted = await lease.AbandonOperatorImportAsync(id => PhysicalAgentImport.RemoveStaging(physicalVolume, id));
             report.Root["tenant"]!["state"] = "deleting";
             report.Root["tenant"]!["id"] = deleted.Id;
             report.Root["tenant"]!["deletionEpoch"] = deleted.Epoch;

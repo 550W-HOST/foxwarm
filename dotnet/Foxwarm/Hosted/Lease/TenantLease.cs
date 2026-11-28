@@ -513,7 +513,7 @@ internal sealed class TenantLease
         }
         await using (var held = new NpgsqlCommand(
             "SELECT 1 FROM tenant_leases WHERE tenant_id = $1 AND owner_replica = $2 AND epoch = $3"
-                + " AND state = 'active' AND expires_at > now() FOR UPDATE",
+                + " AND state = 'active' FOR UPDATE",
             connection,
             transaction
         ))
@@ -525,7 +525,8 @@ internal sealed class TenantLease
                 throw new TenantFencedException("The import no longer holds the tenant lease.");
         }
         await using var activate = new NpgsqlCommand(
-            "WITH activated AS (UPDATE tenants SET state = 'active', agent_import_plan = NULL WHERE tenant_id = $1 AND state = $3 RETURNING tenant_id),"
+            "WITH activated AS (UPDATE tenants SET state = 'active', agent_import_plan = NULL WHERE tenant_id = $1 AND state = $3"
+                + " AND EXISTS (SELECT 1 FROM tenant_leases WHERE tenant_id=$1 AND expires_at > clock_timestamp()) RETURNING tenant_id),"
                 + " released AS (UPDATE tenant_leases SET state = 'released', expires_at = now()"
                 + " WHERE tenant_id IN (SELECT tenant_id FROM activated) RETURNING tenant_id)"
                 + " SELECT tenant_id, pg_notify($2, tenant_id::text) FROM released",
@@ -538,8 +539,18 @@ internal sealed class TenantLease
         if (await activate.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
             throw new TenantFencedException("The tenant is not in the expected import state.");
         // Publish a verified physical tree by same-volume rename while both rows are locked.
+        token.ThrowIfCancellationRequested();
         publish?.Invoke();
-        await transaction.CommitAsync(token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        try
+        {
+            // Once COMMIT is sent, cancellation cannot establish whether activation happened.
+            await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception error) when (TenantDb.IsLostCommit(error))
+        {
+            throw new CommitOutcomeUnknownException($"The activation COMMIT was not acknowledged. Inspect tenant {Tenant} (ID {grant.TenantId}, import epoch {grant.Epoch}) before retrying or abandoning the import.", error);
+        }
     }
 
     /// <summary>

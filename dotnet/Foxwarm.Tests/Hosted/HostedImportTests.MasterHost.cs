@@ -29,7 +29,7 @@ public sealed partial class HostedImportTests
         if (OperatingSystem.IsWindows()) return;
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
-        var volume = Path.Combine(temp.Path, "volume");
+        var volume = Directory.CreateDirectory(Path.Combine(temp.Path, "volume")).FullName;
         var agent = Directory.CreateDirectory(Path.Combine(fixture.DataRoot, "agents/ops")).FullName;
         var executable = Path.Combine(agent, "worker");
         await File.WriteAllTextAsync(executable, "operator's program");
@@ -43,7 +43,7 @@ public sealed partial class HostedImportTests
         await File.AppendAllTextAsync(Path.Combine(fixture.DataRoot, "state/config.yaml"), "\nclaudeCode: {executable: claude}\n");
         var dry = await OperatorCli(db, "ops", volume, "--dry-run");
         Assert.True(dry.Code == 0, dry.Output);
-        Assert.False(Directory.Exists(volume));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(volume));
         Assert.Equal(0L, await db.ScalarAsync("SELECT count(*) FROM tenants WHERE name='ops'"));
         var imported = await OperatorCli(db, "ops", volume);
         Assert.True(imported.Code == 0, imported.Report?.ToJsonString() ?? imported.Output);
@@ -63,6 +63,14 @@ public sealed partial class HostedImportTests
         Assert.Contains("claudeCode:", (string)(await db.ScalarAsync("SELECT text FROM config_documents WHERE tenant_id=$1 AND name='config'", id))!);
         Assert.Equal(await File.ReadAllTextAsync(Path.Combine(fixture.DataRoot, "state/mcp.json")), (string)(await db.ScalarAsync("SELECT text FROM config_documents WHERE tenant_id=$1 AND name='mcp'", id))!);
         Assert.True((long)(await db.ScalarAsync("SELECT count(*) FROM archive_messages WHERE tenant_id=$1", id))! > 0);
+
+        // The documented cutover step: an imported tenant initially has no routable host.
+        Assert.Equal(0L, await db.ScalarAsync("SELECT count(*) FROM tenant_hostnames WHERE tenant_id=$1", id));
+        await using var control = new Foxwarm.Hosted.Postgres.PgDatabase(db.OperatorConnectionString, "operator-test");
+        var admin = new Foxwarm.Hosted.Operator.OperatorStore(control, HostedTestBackend.Kek);
+        await admin.UpdateAsync("ops", new JsonObject { ["primaryHostname"] = "ops.example.test" }, default);
+        var hosts = new Foxwarm.Hosted.Runtimes.HostnameDirectory(db.OpenApp());
+        Assert.Equal("ops", await hosts.ResolveAsync("ops.example.test", default));
     }
 
     [Theory]
@@ -75,7 +83,7 @@ public sealed partial class HostedImportTests
         if (OperatingSystem.IsWindows()) return; // The master-host image uses POSIX directory rename.
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
-        var volume = Path.Combine(temp.Path, "volume");
+        var volume = Directory.CreateDirectory(Path.Combine(temp.Path, "volume")).FullName;
         await db.ExecuteOwnerAsync("UPDATE tenants SET profile='operator', pinned_role='master-host'");
         var target = Directory.CreateDirectory(Path.Combine(volume, (await db.TenantIdAsync()).ToString())).FullName;
         var original = Directory.CreateDirectory(Path.Combine(fixture.DataRoot, "agents", "from-copy"));
@@ -119,7 +127,7 @@ public sealed partial class HostedImportTests
         await db.ExecuteOwnerAsync($"UPDATE tenants SET state='{state}', profile='operator', pinned_role='master-host'");
         if (held) await db.ExecuteOwnerAsync("UPDATE tenant_leases SET state='active', owner_replica='import:owner', expires_at=now()+interval '1 minute'");
         var id = await db.TenantIdAsync();
-        var volume = Path.Combine(temp.Path, "volume");
+        var volume = Directory.CreateDirectory(Path.Combine(temp.Path, "volume")).FullName;
         var stage = Directory.CreateDirectory(Path.Combine(volume, $".import-{id}-{Guid.NewGuid():N}"));
         var unrelated = Directory.CreateDirectory(Path.Combine(volume, $".import-{id + 1}-{Guid.NewGuid():N}"));
         var stdout = new StringWriter();
@@ -149,7 +157,7 @@ public sealed partial class HostedImportTests
     {
         var server = await PostgresServer.SharedAsync();
         await using var db = await server.CreateDatabaseAsync();
-        var volume = Path.Combine(temp.Path, "volume");
+        var volume = Directory.CreateDirectory(Path.Combine(temp.Path, "volume")).FullName;
         Assert.Equal(HostedImport.Refused, (await OperatorCli(db, PostgresServer.Tenant, volume)).Code);
         await db.ExecuteOwnerAsync("UPDATE tenants SET profile='operator', pinned_role='master-host'");
         var second = await OperatorCli(db, "other", volume);

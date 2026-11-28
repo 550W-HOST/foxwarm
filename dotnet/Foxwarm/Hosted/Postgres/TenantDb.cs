@@ -531,7 +531,7 @@ internal sealed class TenantDb
     private static Exception Unwrap(Exception translated, Exception original) =>
         translated is RetryableFailure ? original : translated;
 
-    private static bool IsLostCommit(Exception error) =>
+    internal static bool IsLostCommit(Exception error) =>
         error is NpgsqlException { InnerException: IOException or TimeoutException }
             or NpgsqlException { IsTransient: true } and not PostgresException
             or IOException
