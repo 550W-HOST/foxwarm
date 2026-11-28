@@ -138,14 +138,15 @@ internal sealed class MainHost : IAsyncDisposable
         FoxwarmTraces? traces = null;
         try
         {
-            configuration.Traces = traces = FoxwarmTraces.Open(configuration);
+            traces = FoxwarmTraces.Open(configuration);
             sessions = new SessionManager(
                 dataRoot,
                 workspaceRoot,
                 options,
                 configuration.Models,
                 paths?.SkillsRoot,
-                paths
+                paths,
+                traces: traces
             );
         }
         catch (Exception error)

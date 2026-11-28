@@ -45,6 +45,7 @@ public sealed record ResponsesClientOptions(
     internal Func<JsonObject, bool, Task<JsonObject>>? CommitAssistantSegment { get; init; }
     internal string? ProviderPromptCacheKey { get; init; }
     internal Func<JsonNode, Task>? AttemptPrepared { get; init; }
+    internal bool TraceWireResult { get; init; }
     internal JsonObject? WebSearch { get; init; }
     internal JsonObject? ImageGeneration { get; init; }
     internal bool ImageGenerationOnly { get; init; }

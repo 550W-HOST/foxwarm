@@ -149,6 +149,13 @@ public sealed record ChatResult(
     internal bool ContextCompacted { get; init; }
     internal string? TruncatedStopReason { get; init; }
 
+    // Normalized only from an observed provider termination or tool call.
+    internal string? FinishReason { get; init; }
+    internal bool UsedTextRedaction { get; init; }
+
+    // The provider-form result for explicitly traced content on a redacting leaf. Never persisted.
+    internal ChatResult? TraceWireResult { get; init; }
+
     // Tokens of a different model than the captured conversation model (for example Images API
     // tokens): the service already priced them, or left them unpriced, so the conversation
     // model's pricing never applies and any cost in Usage is kept.

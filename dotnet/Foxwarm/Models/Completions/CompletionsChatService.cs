@@ -51,6 +51,15 @@ internal sealed class CompletionsChatService(
         );
         if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant))
             throw ModelAttemptFailure.Empty();
-        return new ChatResult(assistant);
+        return new ChatResult(assistant)
+        {
+            FinishReason = SessionWait.Text(
+                completed.Payload["choices"]?[0]?["finish_reason"]
+            ) switch
+            {
+                "tool_calls" or "function_call" => "tool_call",
+                var other => other,
+            },
+        };
     }
 }

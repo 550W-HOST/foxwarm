@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Secrets;
 using Foxwarm.Sessions;
+using Microsoft.Extensions.Configuration;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Resources;
@@ -65,6 +66,23 @@ internal sealed partial class FoxwarmTraces : IDisposable
         var app = configuration.AppConfiguration;
         if (OtlpConfiguration.Capture(app) is not { Enabled: true } config)
             return null;
+        // Use the same case-insensitive environment provider as the OTLP SDK. Its public
+        // exporter constructor otherwise enables disk storage before the trace provider exists.
+        using var environment = new ConfigurationManager();
+        environment.AddEnvironmentVariables();
+        if (bool.TryParse(environment["OTEL_SDK_DISABLED"], out var disabled) && disabled)
+            return null;
+        var retry = environment["OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY"];
+        if (
+            !string.IsNullOrWhiteSpace(retry)
+            && !string.Equals(retry, "in_memory", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            Console.Error.WriteLine(
+                "OTLP tracing disabled: only in-memory retry is supported. Unset OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY or set it to in_memory."
+            );
+            return null;
+        }
         var missing = new List<string>();
         // Resolve only the OTLP header sink. Unavailable credentials for other services must
         // not stop tracing, and a missing OTLP credential must never produce an unauthenticated export.

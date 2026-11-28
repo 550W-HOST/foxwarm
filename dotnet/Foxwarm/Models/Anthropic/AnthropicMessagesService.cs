@@ -228,6 +228,13 @@ internal sealed class AnthropicMessagesService(
                     || allowContinuation
                         && SessionWait.Text(responseBody?["stop_reason"]) == "tool_use"
                         && AnthropicSearchHistory.HasPendingCalls(responseBody),
+                FinishReason = SessionWait.Text(responseBody?["stop_reason"]) switch
+                {
+                    "end_turn" or "stop_sequence" => "stop",
+                    "tool_use" => "tool_call",
+                    "max_tokens" or "model_context_window_exceeded" => "length",
+                    var other => other,
+                },
                 TruncatedStopReason = AnthropicCanonicalConverter.StopReason(payload),
             };
         }

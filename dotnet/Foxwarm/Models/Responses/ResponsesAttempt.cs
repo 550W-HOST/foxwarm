@@ -262,6 +262,13 @@ internal sealed class ResponsesAttempt : IDisposable
         )
         {
             CommittedSegments = committed.ToArray(),
+            FinishReason =
+                output.Any(item =>
+                    SessionWait.Text((item as JsonObject)?["type"]) == "function_call"
+                )
+                    ? "tool_call"
+                : responseCompleted || SessionWait.Text(response["status"]) == "completed" ? "stop"
+                : null,
         };
     }
 

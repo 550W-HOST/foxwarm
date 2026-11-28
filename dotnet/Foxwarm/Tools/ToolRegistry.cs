@@ -296,6 +296,7 @@ internal sealed class ToolRegistry(
                     }
         )
             Foxwarm.Secrets.SecretMarkerGuard.Require(resolved.Args, known);
+        owner.RecordAuthorizedArguments(span, resolved);
         var result =
             resolved.Source == "mcp"
                 ? await mcp.CallAsync(

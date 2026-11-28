@@ -175,6 +175,8 @@ internal sealed class TextRedactionChatService(
         return result with
         {
             AssistantMessage = restoredAssistant,
+            UsedTextRedaction = true,
+            TraceWireResult = options.TraceWireResult ? result : null,
             CommittedSegments = committed,
             HistoryAppend = finalizer is null
                 ? null

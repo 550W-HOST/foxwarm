@@ -19,6 +19,7 @@ internal sealed partial class SessionToolExecutor(
 {
     private int finishPending;
     private long? foregroundBatch;
+    private ChatResult? traceBatch;
     internal bool BatchCompacted { get; private set; }
     private int policyUnavailable;
     private readonly List<TurnToolReceipt> turnReceipts = [];
@@ -500,7 +501,9 @@ internal sealed partial class SessionToolExecutor(
     )
     {
         var traces = hosted.Registry.Traces;
+        var batch = ScriptDetached ? null : traceBatch;
         using var span = traces?.StartTool(hosted.Id, call);
+        FoxwarmTraces.SetJournal(span, batch?.JournalRequestId, batch?.JournalAttempt);
         try
         {
             await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
@@ -560,7 +563,12 @@ internal sealed partial class SessionToolExecutor(
                     current.Approval,
                     current.Target
                 );
-                traces?.CompleteTool(span, result, current.Timing is not null);
+                traces?.CompleteTool(
+                    span,
+                    result,
+                    current.Timing is not null,
+                    captureResult: !ScriptDetached && batch?.UsedTextRedaction != true
+                );
                 return result;
             }
             finally
@@ -581,16 +589,73 @@ internal sealed partial class SessionToolExecutor(
         }
     }
 
+    internal void RecordAuthorizedArguments(Activity? span, ResolvedTool resolved)
+    {
+        var traces = hosted.Registry.Traces;
+        if (
+            span is null
+            || traces?.CaptureArguments != true
+            || ScriptDetached
+            || IsCtlFrontEnd(resolved)
+        )
+            return;
+        // A script can embed unapproved calls and credentials in either source or input data.
+        if (
+            resolved.Source == "builtin"
+            && resolved.Name
+                is "run_script"
+                    or "start_toolscript_run"
+                    or "continue_script"
+                    or "run_skill"
+        )
+            return;
+        var args = resolved.Args;
+        if (traceBatch?.UsedTextRedaction == true)
+        {
+            // Resolved wrapper/dynamic arguments may have been restored. Only the direct
+            // provider proposal can supply a safe representation of a redacting leaf's call.
+            if (
+                Programmatic
+                || resolved.InvocationName != resolved.Name
+                || traceBatch.TraceWireResult?.AssistantMessage?["parts"] is not JsonArray parts
+                || parts.Count > 256
+            )
+                return;
+            var id = invocation.Value?.CallId;
+            var calls = parts
+                .OfType<JsonObject>()
+                .Select(part => part["functionCall"] as JsonObject)
+                .Where(call =>
+                    call is not null
+                    && SessionWait.Text(call["id"]) == id
+                    && SessionWait.Text(call["name"]) == resolved.Name
+                )
+                .Take(2)
+                .ToArray();
+            if (calls.Length != 1 || calls[0]!["args"] is not JsonObject wire)
+                return;
+            args = wire;
+        }
+        traces.RecordArguments(
+            span,
+            args,
+            resolved.Source == "builtin" && resolved.Name == "add_secret",
+            sessions.Secrets
+        );
+    }
+
     internal void TraceUnstarted(JsonObject call, TurnToolExecution result)
     {
         var traces = hosted.Registry.Traces;
         using var span = traces?.StartTool(hosted.Id, call);
+        FoxwarmTraces.SetJournal(span, traceBatch?.JournalRequestId, traceBatch?.JournalAttempt);
         traces?.CompleteTool(span, result, started: false);
     }
 
-    internal void BeginBatch(JsonObject canonicalAssistant)
+    internal void BeginBatch(JsonObject canonicalAssistant, ChatResult? result = null)
     {
         foregroundBatch = CompactCandidateBuilder.Number(canonicalAssistant["__meta"]?["seq"]);
+        traceBatch = hosted.Registry.Traces is null ? null : result;
         BatchCompacted = false;
     }
 
@@ -598,6 +663,7 @@ internal sealed partial class SessionToolExecutor(
     {
         var sequence = foregroundBatch;
         foregroundBatch = null;
+        traceBatch = null;
         if (sequence is long seq)
             await hosted.Compactor.DiscardUnpairedInContextAsync(seq);
     }

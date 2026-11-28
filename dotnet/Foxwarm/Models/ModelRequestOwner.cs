@@ -421,6 +421,8 @@ internal sealed class ModelRequestOwner(
                                     .ConfigureAwait(false);
                             }
                             : null,
+                    TraceWireResult =
+                        options.TextRedaction is not null && traces?.NeedsWireResult == true,
                     AttemptPrepared = async payload =>
                     {
                         // Serializers call this only after the complete semantic body exists.
@@ -449,7 +451,9 @@ internal sealed class ModelRequestOwner(
                             route.Key,
                             journalPurpose,
                             attempt,
-                            payload
+                            payload,
+                            currentJournalRequestId,
+                            currentJournalRequestId is null ? null : currentJournalAttempt
                         );
                     },
                 };

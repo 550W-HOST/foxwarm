@@ -98,13 +98,13 @@ internal sealed record OtlpConfiguration(
             endpoint,
             headers,
             new(
-                Flag(content, "systemPrompt", true),
-                Flag(content, "inputMessages", true),
-                Flag(content, "outputMessages", true),
-                Flag(content, "toolDefinitions", true),
-                Flag(content, "toolArguments", true),
-                Flag(content, "toolResults", true),
-                Flag(content, "reasoning", true)
+                Flag(content, "systemPrompt", false),
+                Flag(content, "inputMessages", false),
+                Flag(content, "outputMessages", false),
+                Flag(content, "toolDefinitions", false),
+                Flag(content, "toolArguments", false),
+                Flag(content, "toolResults", false),
+                Flag(content, "reasoning", false)
             )
         );
     }

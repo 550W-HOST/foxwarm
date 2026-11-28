@@ -282,6 +282,7 @@ public sealed class AnthropicStreamingTests
             CancellationToken.None
         );
         Assert.Equal(reason, result.TruncatedStopReason);
+        Assert.Equal("length", result.FinishReason);
         var calls = result.AssistantMessage!["parts"]!
             .AsArray()
             .OfType<JsonObject>()

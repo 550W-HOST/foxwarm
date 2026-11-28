@@ -256,7 +256,7 @@ public sealed partial class LocalSessionTurnHost
                         )
                     );
                     if (tools is SessionToolExecutor batchTools)
-                        batchTools.BeginBatch(appended[^1]);
+                        batchTools.BeginBatch(appended[^1], result);
                     var toolParts = await ExecuteToolBatchAsync(
                             ToolCallControls.Plan(calls),
                             registered.Token

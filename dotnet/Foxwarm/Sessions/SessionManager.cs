@@ -36,7 +36,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal Foxwarm.McpClient OutboundMcp => mcp;
     internal SessionRuntimeCredentialStore RuntimeCredentials { get; } = new();
     internal Uri? RuntimeMcpEndpoint { get; set; }
-    private Foxwarm.Telemetry.FoxwarmTraces? Traces => models.ConfigurationOwner?.Traces;
+    private readonly Foxwarm.Telemetry.FoxwarmTraces? Traces;
     internal Foxwarm.Channels.ChannelRegistry ChannelRegistry { get; } = new();
     internal Foxwarm.Nodes.NodeConnectionHub Nodes { get; }
     internal Foxwarm.Nodes.NodeProviderRegistry NodeProviders { get; }
@@ -74,9 +74,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         HostPaths? hostPaths = null,
         Action<string, AtomicJsonWriteStage>? authorityStageHook = null,
         Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null,
-        Foxwarm.Storage.IStorageContext? storage = null
+        Foxwarm.Storage.IStorageContext? storage = null,
+        Foxwarm.Telemetry.FoxwarmTraces? traces = null
     )
     {
+        Traces = traces;
         this.hostPaths = hostPaths;
         // The test hooks belong to the default file context; a supplied context brings its own.
         Storage =
