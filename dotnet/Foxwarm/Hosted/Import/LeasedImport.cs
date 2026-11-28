@@ -12,7 +12,7 @@ internal static class LeasedImport
         PgDatabase app, PgDatabase ownerDatabase, string tenant, long? expectedEpoch, ImportKind kind,
         LeaseTimings timings, BlobSettings? blobs, string work, ImportReport report,
         Func<PostgresStorageContext, TenantDb, CancellationToken, Task> run, CancellationToken stop, string? agentPlan = null,
-        TenantProfile profile = TenantProfile.Hosted, Action? publish = null, bool writesAgentBlobs = false)
+        TenantProfile profile = TenantProfile.Hosted, Action? publish = null, bool writesAgentBlobs = false, byte[]? sourceFingerprint = null)
     {
         var state = kind == ImportKind.Full ? "importing" : "importing-agents";
         var lease = new TenantLease(ownerDatabase, tenant, AgentCatalog.ReaderVersion);
@@ -20,7 +20,7 @@ internal static class LeasedImport
         LeaseGrant? grant;
         try
         {
-            grant = await lease.TryAcquireForImportAsync(replica, expectedEpoch, timings.Ttl, timings.RenewInterval, stop, kind, agentPlan, profile);
+            grant = await lease.TryAcquireForImportAsync(replica, expectedEpoch, timings.Ttl, timings.RenewInterval, stop, kind, agentPlan, profile, sourceFingerprint);
         }
         catch (LeaseRefusedException error)
         {

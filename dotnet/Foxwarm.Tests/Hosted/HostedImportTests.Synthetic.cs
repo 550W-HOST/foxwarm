@@ -198,7 +198,7 @@ public sealed partial class HostedImportTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task An_import_refuses_a_tenant_that_holds_rows_and_a_failed_import_is_retried_under_a_new_name()
+    public async Task An_import_refuses_a_tenant_that_holds_rows()
     {
         var server = await PostgresServer.SharedAsync();
         await using var database = await server.CreateDatabaseAsync();
@@ -208,8 +208,7 @@ public sealed partial class HostedImportTests : IAsyncLifetime
 
         var again = await RunAsync(database, fixture.DataRoot, PostgresServer.Tenant, Reports);
         Assert.Equal(HostedImport.Refused, again.Exit);
-        Assert.Contains("already holds data", again.Report["refusals"]!.ToJsonString());
-        Assert.Contains("new --tenant name", again.Report["refusals"]!.ToJsonString());
+        Assert.Contains("already has data", again.Report["refusals"]!.ToJsonString());
         Assert.Equal("active", await TenantStateAsync(database, PostgresServer.Tenant));
     }
 

@@ -106,6 +106,33 @@ public sealed class HostedImportS3Tests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Interrupted_full_import_with_only_an_S3_inventory_retries_on_the_same_destination()
+    {
+        await using var db = await (await PostgresServer.SharedAsync()).CreateDatabaseAsync();
+        await using var bucket = await S3TestBucket.CreateAsync();
+        var settings = await SettingsAsync(bucket);
+        var agents = Directory.CreateDirectory(Path.Combine(temp.Path, "agent-source")).FullName;
+        await File.WriteAllBytesAsync(Path.Combine(agents, "file"), new byte[PgAgentFileStore.InlineBytes + 1]);
+        using var stop = new CancellationTokenSource();
+        var op = new OperatorStore(db.OpenApp(db.OperatorConnectionString), HostedTestBackend.Kek, settings);
+        var worker = op.RunDeletionLoopAsync(stop.Token);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var options = new HostedImportOptions(fixture.DataRoot, "retry", false, false, Path.Combine(temp.Path, "first.json"))
+            { Blobs = new(BlobBackend.S3, settings), AgentsDirectory = agents };
+        async Task<int> Attempt(HostedImportOptions o) => await HostedImport.RunAsync(o,
+            new(db.OpenApp(), db.OpenOwner(), HostedTestBackend.Kek), new StringWriter(), deadline.Token);
+        try
+        {
+            Assert.Equal(HostedImport.Failed, await Attempt(options with { BeforePhase = _ => throw new IOException("Interrupted before key adoption.") }));
+            Assert.True(await db.ScalarAsync("SELECT blob_inventory IS NOT NULL AND bytes=0 AND entries=0 AND generation=0 FROM agent_file_usage") is true);
+            Assert.Equal(0L, await db.ScalarAsync("SELECT count(*) FROM tenant_keys"));
+            Assert.Equal(0L, await db.ScalarAsync("SELECT count(*) FROM agent_files"));
+            Assert.Equal(HostedImport.Imported, await Attempt(options with { ReportPath = Path.Combine(temp.Path, "retry.json") }));
+        }
+        finally { stop.Cancel(); await worker; }
+    }
+
+    [Fact]
     public async Task A_fenced_import_waiting_for_inventory_leaves_no_payload_rows()
     {
         var postgres = await PostgresServer.SharedAsync();

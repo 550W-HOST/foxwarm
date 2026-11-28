@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Hosted;
+using Foxwarm.Hosted.Import;
 using Foxwarm.Hosted.Lease;
 using Foxwarm.Hosted.Operator;
 using Foxwarm.Hosted.Postgres;
@@ -469,22 +470,23 @@ public sealed class OperatorBoundaryTests
     }
 
     [Fact]
-    public async Task TwoImportsOfOneInstallationReceiveIndependentRotatedCredentials()
+    public async Task DistinctImportedInstallationsRotateIndependentlyAndCannotBeCloned()
     {
         await using var harness = await ReplicaProcessHarness.CreateAsync();
         var db = harness.Database;
         using var root = new TempDirectory();
         var file = Path.Combine(root.Path, "kek");
         var kek = KeyEncryptionKey.From(InstanceKeys.OpenOrCreate(file));
-        var fixture = await ImportFixture.BuildAsync(Path.Combine(root.Path, "source"));
+        var sources = new Dictionary<string, string>();
         await using var op = new PgDatabase(db.OperatorConnectionString, "operator-test");
         var store = new OperatorStore(op, kek);
         var names = new[] { "first", "second" };
         foreach (var name in names)
         {
+            sources[name] = (await ImportFixture.BuildAsync(Path.Combine(root.Path, name + "-source"))).DataRoot;
             var r = await HostedImportTests.RunAsync(
                 db,
-                fixture.DataRoot,
+                sources[name],
                 name,
                 Directory.CreateDirectory(Path.Combine(root.Path, name)).FullName,
                 kek: kek
@@ -515,12 +517,10 @@ public sealed class OperatorBoundaryTests
             );
             return await client.SendAsync(request);
         }
-        var original = (
-            await File.ReadAllTextAsync(Path.Combine(fixture.DataRoot, "state", "token"))
-        ).Trim();
         var issued = new List<string>();
         foreach (var name in names)
         {
+            var original = (await File.ReadAllTextAsync(Path.Combine(sources[name], "state", "token"))).Trim();
             using (var preserved = await Auth(name, original))
                 Assert.Equal(HttpStatusCode.OK, preserved.StatusCode);
             var setup = (string)(await store.RotateAsync(name, default))["setupToken"]!;
@@ -537,6 +537,11 @@ public sealed class OperatorBoundaryTests
             Assert.NotNull(access);
             issued.Add(access);
         }
+        var duplicate = await HostedImportTests.RunAsync(db, sources["first"], "clone", root.Path, kek: kek);
+        Assert.Equal(HostedImport.Refused, duplicate.Exit);
+        Assert.Equal("This installation was already imported into tenant 'first'. Importing it again would share its Node and webhook credentials. Delete that tenant first.",
+            Assert.Single(duplicate.Report["refusals"]!.AsArray())!.GetValue<string>());
+        Assert.Null(await db.ScalarAsync("SELECT tenant_id FROM tenants WHERE name='clone'"));
         Assert.NotEqual(issued[0], issued[1]);
         using var cross1 = await Auth(names[0], issued[1]);
         using var cross2 = await Auth(names[1], issued[0]);
