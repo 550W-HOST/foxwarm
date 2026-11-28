@@ -197,8 +197,10 @@ internal sealed partial class SessionManager
 
     internal async Task AdmitWaitEventAsync(string sessionId, QueueItem item)
     {
-        if (!Accepting)
+        using var admittedProducer = producers?.TryEnterProducer();
+        if (!Accepting || producers is not null && admittedProducer is null)
             return;
+        var producerToken = producers?.StartupAborted ?? default;
         if (
             SessionWait.Text(item.OpenFields?["waitLivenessWaitId"]) is not null
             && !WaitLiveness.Recent(
@@ -207,13 +209,14 @@ internal sealed partial class SessionManager
             )
         )
             return;
-        using var use = await UseExistingAsync(sessionId);
+        using var use = await UseExistingAsync(sessionId, producerToken);
         var owner = use?.Owner;
         if (owner is null)
             return;
         bool admitted;
         try
         {
+            producerToken.ThrowIfCancellationRequested();
             admitted = await owner.Entry.SaveLane.AdmitAsync(item, SaveKind.Strict);
         }
         catch (AuthorityCommittedException)
