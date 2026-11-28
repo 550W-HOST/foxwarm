@@ -14,7 +14,10 @@ public sealed class AgentBlobReservationTests
     {
         var (db, tenant) = await PostgresAgentFilesTests.OpenAsync();
         await using var _ = db;
-        await SchemaMigrator.MigrateAsync(db.OpenOwner(), PostgresServer.AppRole, PostgresServer.OperatorRole, "sibling");
+        await db.ExecuteOwnerAsync("""
+            WITH sibling AS (INSERT INTO tenants(name) VALUES ('sibling') RETURNING tenant_id)
+            INSERT INTO tenant_leases(tenant_id) SELECT tenant_id FROM sibling
+            """);
         var siblingId = await db.TenantIdAsync("sibling");
         var sibling = new TenantDb(db.OpenApp(), siblingId, await db.TakeLeaseAsync(siblingId));
         var bytes = new byte[PgAgentFileStore.InlineBytes + 1];
@@ -64,9 +67,9 @@ public sealed class AgentBlobReservationTests
         await using var db = await server.CreateDatabaseAsync(migrated: false);
         var owner = db.OpenOwner();
         var previous = SchemaMigrator.Embedded.Where(m => m.Version is not (1102 or 1103)).ToArray();
-        await SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole, null, previous);
+        await SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole, previous);
         Assert.True(previous.Any(m => m.Version == 1201));
-        var applied = await SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole, null);
+        var applied = await SchemaMigrator.MigrateAsync(owner, PostgresServer.AppRole, PostgresServer.OperatorRole);
         Assert.Equal(new[] { 1102, 1103 }, applied.Select(m => m.Version));
     }
 
