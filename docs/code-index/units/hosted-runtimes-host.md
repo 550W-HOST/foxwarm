@@ -38,7 +38,7 @@ A P2 replica serves many tenants behind one front. This unit owns where a tenant
 - **Stop.** A graceful stop runs `ShutdownAsync` (parallel retirement under one bound), then stops the front. The exit is `Stopped` when every stop was confirmed and `Fenced` otherwise; the boot row is removed only after a confirmed stop.
 - **Operator-document callback.** Production passes each runtime's `MainHostRuntime.OperatorDocumentsChanged`, which invalidates the runtime's cached ceiling.
 - **P1 limitation.** The single-tenant `HostedReplica` has no `foxwarm_operator` listener: its runtime's cached ceiling can outlive an operator edit until the runtime restarts. This ends at the FW cutover, when the runtimes host replaces it; no P1 listener is planned.
-- **Not yet.** Tenant runtimes report themselves never idle, so idle release releases nothing until runtimes report busy work and wake-ups.
+- **Idle release and autonomous activation.** Production generations expose their activity, stop and settle producers, then supply the release deadline. Each replica also runs the [wake-up and recovery scans](./hosted-channels-timers.md).
 
 ## Tests
 
