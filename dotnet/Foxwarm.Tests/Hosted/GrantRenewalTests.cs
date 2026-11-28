@@ -272,7 +272,9 @@ public sealed class GrantRenewalTests
         {
             var lease = new TenantLease(control, grant.Tenant, 2) { LockTimeout = TimeSpan.FromMilliseconds(300) };
             var started = Stopwatch.StartNew();
-            Assert.False(await lease.ReleaseWithWakeupAsync(grant, null, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+            var contended = await Assert.ThrowsAsync<PostgresException>(() =>
+                lease.ReleaseWithWakeupAsync(grant, null, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal("55P03", contended.SqlState);
             Assert.True(started.Elapsed < TimeSpan.FromSeconds(2));
             var error = await Assert.ThrowsAsync<PostgresException>(() => lease.ReleaseAsync(grant, CancellationToken.None));
             Assert.Equal("55P03", error.SqlState);

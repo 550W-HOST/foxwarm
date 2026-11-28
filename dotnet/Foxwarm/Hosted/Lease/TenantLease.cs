@@ -763,7 +763,7 @@ internal sealed class TenantLease
                 await write.ExecuteNonQueryAsync(token).ConfigureAwait(false);
             }
         }
-        catch (PostgresException error) when (error.SqlState is TenantDb.FenceSqlState or "55P03")
+        catch (PostgresException error) when (error.SqlState == TenantDb.FenceSqlState)
         {
             return false;
         }
@@ -779,16 +779,11 @@ internal sealed class TenantLease
         release.Parameters.Add(new NpgsqlParameter<string> { TypedValue = grant.Replica });
         release.Parameters.Add(new NpgsqlParameter<long> { TypedValue = grant.Epoch });
         release.Parameters.Add(new NpgsqlParameter<string> { TypedValue = Channel });
-        var released = false;
-        try
-        {
-            await using var reader = await release.ExecuteReaderAsync(token).ConfigureAwait(false);
+        // A lock timeout leaves the active grant untouched. Let it reach the hand-back
+        // coordinator as an unacknowledged release, unlike a definite stale epoch.
+        bool released;
+        await using (var reader = await release.ExecuteReaderAsync(token).ConfigureAwait(false))
             released = await reader.ReadAsync(token).ConfigureAwait(false);
-        }
-        catch (PostgresException error) when (error.SqlState == "55P03")
-        {
-            return false;
-        }
         if (!released)
             return false;
         await transaction.CommitAsync(token).ConfigureAwait(false);
