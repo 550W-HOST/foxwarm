@@ -182,9 +182,9 @@ public sealed partial class TenantReplicaTests
         capacity = true;
         await registry.RemoveAsync(second + "/1", default);
         Assert.True(await router.MayStartAutonomousAsync(slug, false, default));
-        await cluster.Database.ExecuteOwnerAsync("UPDATE tenants SET pinned_role='master-host' WHERE name='alpha'");
+        await cluster.Database.ExecuteOwnerAsync("UPDATE tenants SET profile='operator', pinned_role='master-host' WHERE name='alpha'");
         Assert.False(await router.MayStartAutonomousAsync(slug, true, default));
-        await cluster.Database.ExecuteOwnerAsync("UPDATE tenants SET pinned_role=NULL WHERE name='alpha'");
+        await cluster.Database.ExecuteOwnerAsync("UPDATE tenants SET profile='hosted', pinned_role=NULL WHERE name='alpha'");
         await cluster.Database.TakeLeaseAsync(await cluster.Database.TenantIdAsync(slug), "elsewhere/1");
         Assert.False(await router.MayStartAutonomousAsync(slug, true, default));
         await cluster.Database.ExecuteOwnerAsync("UPDATE tenant_leases SET state='released' WHERE owner_replica='elsewhere/1'");
