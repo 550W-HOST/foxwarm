@@ -9,6 +9,7 @@ namespace Foxwarm.Hosted.Autonomous;
 internal sealed class Wakeups(
     PgDatabase database,
     TimeSpan liveFor,
+    string role, int readerVersion,
     Func<string, bool, CancellationToken, Task<bool>> mayStart,
     Func<string, ActivationCause, CancellationToken, Task> activate,
     Action<string> log)
@@ -28,12 +29,12 @@ internal sealed class Wakeups(
             : "tenant_wakeups w JOIN tenant_leases l USING (tenant_id)";
         var predicate = recovery
             ? "l.state = 'active' AND l.expires_at <= now()"
-            : "l.state = 'released' AND w.due_at <= now() + make_interval(secs => $4)";
+            : "l.state = 'released' AND w.due_at <= now() + make_interval(secs => $6)";
         return await database.ClusterAsync(async (tx, ct) =>
         {
             object?[] parameters = recovery
-                ? [liveFor.TotalSeconds, RankGrace.TotalSeconds, BatchSize]
-                : [liveFor.TotalSeconds, RankGrace.TotalSeconds, BatchSize, Interval.TotalSeconds];
+                ? [liveFor.TotalSeconds, RankGrace.TotalSeconds, BatchSize, role, readerVersion]
+                : [liveFor.TotalSeconds, RankGrace.TotalSeconds, BatchSize, role, readerVersion, Interval.TotalSeconds];
             await using var command = tx.Command($"""
                 WITH live AS (
                     SELECT DISTINCT ON (coalesce(name, replica_id)) role, draining, reader_version
@@ -42,9 +43,9 @@ internal sealed class Wakeups(
                 )
                 SELECT t.tenant_id, t.name, now() >= {due} + make_interval(secs => $2) FROM {source}
                   JOIN tenants t ON t.tenant_id = l.tenant_id
-                WHERE t.state = 'active' AND {predicate}
+                WHERE t.state = 'active' AND {predicate} AND t.min_reader_version <= $5
                   AND (w.next_attempt_at IS NULL OR w.next_attempt_at <= now())
-                  AND EXISTS (SELECT FROM live r WHERE NOT r.draining AND r.reader_version >= t.min_reader_version
+                  AND EXISTS (SELECT FROM live r WHERE r.role=$4 AND NOT r.draining AND r.reader_version >= t.min_reader_version
                     AND ((t.profile = 'hosted' AND t.pinned_role IS NULL AND r.role = 'general')
                       OR (t.profile = 'operator' AND r.role = 'master-host')))
                 ORDER BY {due}, t.tenant_id LIMIT $3
@@ -57,24 +58,52 @@ internal sealed class Wakeups(
         }, token).ConfigureAwait(false);
     }
 
-    internal async Task ScanAsync(CancellationToken token)
+    // One slow builder must not stall discovery. Reserve slots separately for expired grants
+    // and due wake-ups, so a full class cannot indefinitely crowd the other out.
+    private readonly object gate = new();
+    private readonly Dictionary<int, (ActivationCause Cause, Task Work)> outstanding = [];
+    internal async Task DiscoverAsync(CancellationToken token)
     {
         foreach (var cause in new[] { ActivationCause.Wakeup, ActivationCause.Recovery })
         {
-            var candidates = await ReadAsync(cause, token).ConfigureAwait(false);
-            await Parallel.ForEachAsync(candidates, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = token },
-                async (item, ct) =>
+            foreach (var candidate in await ReadAsync(cause, token).ConfigureAwait(false))
+            {
+                lock (gate)
                 {
-                    try
+                    if (outstanding.ContainsKey(candidate.TenantId)) continue;
+                    if (outstanding.Values.Count(item => item.Cause == cause) >= 4) break;
+                    // Placement reads complete within the router's request budget. Only actual
+                    // activations consume a slot across scans.
+                }
+                try
+                {
+                    if (!await mayStart(candidate.Slug, candidate.GraceElapsed, token).ConfigureAwait(false)) continue;
+                }
+                catch (Exception error) when (!token.IsCancellationRequested)
+                {
+                    log($"[hosted] Placement lookup for tenant {candidate.TenantId} failed: {error.Message}");
+                    continue;
+                }
+                lock (gate)
+                {
+                    if (outstanding.ContainsKey(candidate.TenantId) || outstanding.Values.Count(item => item.Cause == cause) >= 4) continue;
+                    outstanding[candidate.TenantId] = (cause, Task.Run(async () =>
                     {
-                        if (await mayStart(item.Slug, item.GraceElapsed, ct).ConfigureAwait(false))
-                            await activate(item.Slug, item.Cause, ct).ConfigureAwait(false);
-                    }
-                    catch (Exception error) when (error is TenantHeldElsewhereException or TenantNotEligibleException or LeaseRefusedException or TenantFencedException) { }
-                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                    catch (Exception error) { log($"[hosted] Wake-up for tenant {item.TenantId} failed: {error.Message}"); }
-                }).ConfigureAwait(false);
+                        try { await activate(candidate.Slug, cause, token).ConfigureAwait(false); }
+                        catch (Exception error) when (error is TenantHeldElsewhereException or TenantNotEligibleException
+                            or LeaseRefusedException or TenantFencedException or AutonomousDemandSettledException) { }
+                        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                        catch (Exception error) { log($"[hosted] Wake-up for tenant {candidate.TenantId} failed: {error.Message}"); }
+                        finally { lock (gate) outstanding.Remove(candidate.TenantId); }
+                    }));
+                }
+            }
         }
+    }
+
+    internal Task DrainAsync()
+    {
+        lock (gate) return Task.WhenAll(outstanding.Values.Select(task => task.Work));
     }
 
     internal async Task RunAsync(CancellationToken token)
@@ -84,10 +113,11 @@ internal sealed class Wakeups(
         {
             do
             {
-                try { await ScanAsync(token).ConfigureAwait(false); }
+                try { await DiscoverAsync(token).ConfigureAwait(false); }
                 catch (Exception error) when (!token.IsCancellationRequested) { log("[hosted] Wake-up scan failed: " + error.Message); }
             } while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        finally { await DrainAsync().ConfigureAwait(false); }
     }
 }

@@ -24,17 +24,18 @@ public sealed partial class TenantReplicaTests
             await proceed.Task.WaitAsync(token);
             return true;
         }
-        var scan = new Wakeups(f.Database.OpenApp(), TimeSpan.FromMinutes(1), Permit,
-            (slug, cause, ct) =>
-            {
+        Task Join(string slug, ActivationCause cause, CancellationToken ct)
+        {
                 var activation = f.Replica.Activations!.ActivateAsync(slug, cause, ct);
                 if (Interlocked.Increment(ref joins) == 2) joining.TrySetResult();
                 return activation;
-            }, errors.Enqueue);
+        }
+        var scan = new Wakeups(f.Database.OpenApp(), TimeSpan.FromMinutes(1), "general", 2, Permit, Join, errors.Enqueue);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         f.StartGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        var a = scan.ScanAsync(deadline.Token);
-        var b = scan.ScanAsync(deadline.Token);
+        var other = new Wakeups(f.Database.OpenApp(), TimeSpan.FromMinutes(1), "general", 2, Permit, Join, errors.Enqueue);
+        var a = scan.DiscoverAsync(deadline.Token);
+        var b = other.DiscoverAsync(deadline.Token);
         try
         {
             await both.Task.WaitAsync(deadline.Token);
@@ -46,6 +47,7 @@ public sealed partial class TenantReplicaTests
             using var response = await request;
             response.EnsureSuccessStatusCode();
             await Task.WhenAll(a,b);
+            await Task.WhenAll(scan.DrainAsync(), other.DrainAsync());
             Assert.Empty(errors);
             Assert.Equal(1, f.Builds);
             Assert.Single(f.Runtimes);

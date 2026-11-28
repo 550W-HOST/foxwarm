@@ -6,6 +6,27 @@ namespace Foxwarm.Tests.Hosted;
 
 public sealed partial class TenantActivationsTests
 {
+    [Fact]
+    public async Task AStaleBuildRetainsTheNominationUntilItsSuccessorPublishes()
+    {
+        await using var f = await CreateAsync();
+        await f.Database.ExecuteOwnerAsync("INSERT INTO tenant_wakeups(tenant_id,due_at,occurrence) SELECT tenant_id,now(),'{\"timerId\":\"daily\"}' FROM tenants");
+        f.StartGate = Fixture.Closed();
+        var building = f.Activations.ActivateAsync(Tenant);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!f.Events.Any(e => e.StartsWith("start ", StringComparison.Ordinal))) await Task.Delay(10, timeout.Token);
+        var first = f.Runtimes.Single();
+        f.Activations.SettingsChanged(first.Context.Grant, false);
+        using var refused = first.Context.Gate.TryEnterProducer();
+        Assert.Null(refused);
+        f.StartGate.SetResult();
+        await Assert.ThrowsAsync<Foxwarm.Hosted.Lease.LeaseRefusedException>(() => building);
+        Assert.Equal(0, f.Acknowledged);
+        await f.Activations.ActivateAsync(Tenant);
+        Assert.Equal("daily", f.Runtimes.Last().Context.Wakeup!.Occurrence!["timerId"]!.GetValue<string>());
+        Assert.Equal(1, f.Acknowledged);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -40,7 +61,7 @@ public sealed partial class TenantActivationsTests
         };
         if (failDuringBuild) f.BuildFailure = error;
         else f.For(Tenant).StartFailure = error;
-        var activating = f.Activations.ActivateAsync(Tenant, ActivationCause.Recovery);
+        var activating = f.Activations.ActivateAsync(Tenant);
         try
         {
             await cancelled.Task.WaitAsync(deadline.Token);

@@ -24,6 +24,8 @@ internal sealed class RuntimeWakeups(SessionManager sessions, TenantDb database)
 
     internal async Task<WakeupDue?> NextDueAsync(CancellationToken token)
     {
+        if (!sessions.Timers.Reconciled)
+            throw new InvalidOperationException(sessions.Timers.Unavailable ?? "The scheduled occurrence was not reconciled.");
         var next = sessions.Timers.NextWakeup();
         var due = next is { } timer ? new WakeupDue(DateTimeOffset.FromUnixTimeMilliseconds(timer.DueAt), timer.Cron?.ToJson()) : null;
         void Earlier(DateTimeOffset? date)
@@ -51,7 +53,7 @@ internal sealed class RuntimeWakeups(SessionManager sessions, TenantDb database)
         return due;
     }
 
-    internal Task ArmedAsync(CancellationToken token) => database.WriteAsync(
+    internal Task ArmedAsync(CancellationToken token) => !sessions.Timers.Reconciled ? Task.CompletedTask : database.WriteAsync(
         (tx, ct) => tx.ExecuteAsync("SELECT foxwarm_clear_wakeup()", ct),
         new(Verify: tx => tx.Scalar("SELECT 1 FROM tenant_wakeups WHERE tenant_id=$1", database.TenantId) is null, Retryable: true), token);
 }

@@ -204,7 +204,7 @@ internal sealed class TenantReplica
             loops.Add(HeartbeatAsync(registry, background.Token));
             loops.Add(ListenAsync(hostnames, background.Token));
             loops.Add(IdleScanAsync(coordinator, background.Token));
-            var wakeups = new Autonomous.Wakeups(app, options.Timings.Ttl, router.MayStartAutonomousAsync,
+            var wakeups = new Autonomous.Wakeups(app, options.Timings.Ttl, options.Role, options.ReaderVersion, router.MayStartAutonomousAsync,
                 (slug, cause, token) => coordinator.ActivateAsync(slug, cause, token), log);
             loops.Add(wakeups.RunAsync(background.Token));
             await hostnames.RefreshAsync(stop).ConfigureAwait(false);
@@ -539,9 +539,19 @@ internal sealed class TenantReplica
         public async Task StartAsync(CancellationToken token)
         {
             await runtime.StartAsync().ConfigureAwait(false);
-            if (pendingWakeup && wakeups is not null)
-                await wakeups.ArmedAsync(token).ConfigureAwait(false);
             _ = changes.Start();
+        }
+
+        public async Task PublishedAsync(CancellationToken token)
+        {
+            if (!pendingWakeup || wakeups is null) return;
+            // Publication already succeeded. A transient acknowledgement failure leaves the
+            // row for the next epoch's reconciliation, without changing this activation.
+            try { await wakeups.ArmedAsync(token).ConfigureAwait(false); }
+            catch (Exception error) when (!token.IsCancellationRequested)
+            {
+                owner.log("[hosted] Wake-up acknowledgement failed: " + error.Message);
+            }
         }
 
         internal void OperatorDocumentsChanged() => _ = changes.Notify();
