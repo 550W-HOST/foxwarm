@@ -15,6 +15,7 @@ internal enum StateDocumentName
     Installation,
     Secrets,
     SecretExposures,
+    ChannelCursors,
 }
 
 /// <summary>Write-stage observation for tests of the file implementation.</summary>
@@ -89,6 +90,7 @@ internal sealed class FileStateDocuments(string dataRoot) : IStateDocuments
                 options,
                 Absence.NotFound
             ),
+            StateDocumentName.ChannelCursors => new File(root, "state/channel-cursors.json", options, Absence.NotFound, privateFile: true),
             StateDocumentName.Nodes => new File(
                 root,
                 "state/nodes.json",

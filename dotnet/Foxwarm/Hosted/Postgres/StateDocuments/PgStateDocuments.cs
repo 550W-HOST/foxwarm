@@ -25,6 +25,7 @@ internal sealed class PgStateDocuments(TenantDb database) : IStateDocuments
             StateDocumentName.Timers => "timers",
             StateDocumentName.RunningExec => "running-exec",
             StateDocumentName.Channels => "channels",
+            StateDocumentName.ChannelCursors => "channel-cursors",
             StateDocumentName.Nodes => "nodes",
             StateDocumentName.McpOAuth => "mcp-oauth",
             StateDocumentName.Agents => "agents",

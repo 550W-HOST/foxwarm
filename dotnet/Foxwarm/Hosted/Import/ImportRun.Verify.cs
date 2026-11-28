@@ -327,7 +327,7 @@ internal sealed partial class ImportRun
         {
             StateDocumentName.Agents, StateDocumentName.Installation, StateDocumentName.Timers,
             StateDocumentName.Secrets, StateDocumentName.SecretExposures, StateDocumentName.McpOAuth,
-            StateDocumentName.Nodes, StateDocumentName.Channels,
+            StateDocumentName.Nodes, StateDocumentName.Channels, StateDocumentName.ChannelCursors,
         })
         {
             if (file.Open(name).ReadText() is not { } expected)
