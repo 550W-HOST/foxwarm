@@ -117,14 +117,14 @@ function showTenant(tenant) {
       : sample?.requestedAction === 'release'
         ? 'Release requested.'
         : ''
-  const owner = sample?.owner ? `Owner: ${sample.owner}.` : 'No current owner.'
+  const owner = sample?.owner ? `Owner: ${sample.owner}` : 'No current owner.'
   $('leaseStatus').textContent = [
     owner,
     pendingAction,
     sample?.drainingSince && sample.owner ? 'The current lease is draining.' : '',
   ]
     .filter(Boolean)
-    .join(' ')
+    .join('\n')
   const epoch = sample?.epoch
   const exactEpoch = Number.isSafeInteger(epoch) || (typeof epoch === 'string' && /^[1-9][0-9]*$/.test(epoch))
   const canRequest =
@@ -190,7 +190,7 @@ async function refresh() {
     drain.disabled = replica.draining
     drain.onclick = () =>
       perform(async () => {
-        if (!confirm(`Drain ${replica.id}? It will stop accepting new tenants.`)) return
+        if (!confirm(`Drain ${replica.id}? It will stop accepting tenants and move its current tenants to other replicas.`)) return
         await api('replicas/drain', 'POST', JSON.stringify({ boot: replica.id }))
         await refresh()
         notice('Replica drain requested.')

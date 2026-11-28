@@ -81,7 +81,7 @@ test('operator console signs in, edits limits and journal, follows placement and
               id: boot,
               name: 'general-replica-2',
               heldGrants: 1,
-              role: 'general',
+              role: 'master-host',
               version: 'test',
               draining,
               heartbeatAt: '2025-01-01T01:00Z',
@@ -200,6 +200,7 @@ test('operator console signs in, edits limits and journal, follows placement and
     await page.click('#showReplicas')
     assert.equal(await page.$eval('#replicaRows tr td', (e) => e.textContent), boot)
     assert.equal(await page.$eval('#replicaRows tr td', lineCount), 1)
+    assert.equal(await page.$eval('#replicaRows tr td:nth-child(2)', lineCount), 1)
     await page.click('#replicaRows button')
     await page.waitForFunction(() => document.querySelector('#replicaRows button').disabled)
     assert.deepEqual(JSON.parse(requests.find((r) => r.url.endsWith('/replicas/drain')).body), { boot })

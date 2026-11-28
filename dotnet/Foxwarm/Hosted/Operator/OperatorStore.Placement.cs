@@ -21,7 +21,7 @@ internal sealed partial class OperatorStore
             case PlacementRequestResult.Stale:
                 throw new OperatorProblem(
                     409,
-                    "This tenant no longer holds the selected lease. Refresh placement before trying again."
+                    "The tenant's lease has changed since placement was loaded. Refresh placement and try again."
                 );
             case PlacementRequestResult.Conflict:
                 throw new OperatorProblem(
@@ -54,7 +54,7 @@ internal sealed partial class OperatorStore
         if (!await requests.RequestReplicaDrainAsync(boot, token))
             throw new OperatorProblem(
                 404,
-                "That replica boot is no longer available. Refresh placement before trying again."
+                "That replica is no longer running. Refresh placement and try again."
             );
         return new JsonObject { ["id"] = boot, ["draining"] = true };
     }

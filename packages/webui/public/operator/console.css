@@ -243,7 +243,8 @@ summary {
 }
 
 #tenantRows td:nth-child(3),
-#replicaRows td:first-child {
+#replicaRows td:first-child,
+#replicaRows td:nth-child(2) {
   white-space: nowrap;
 }
 
@@ -255,6 +256,7 @@ summary {
   padding: 1rem 0;
 }
 #leaseStatus {
+  white-space: pre-line;
   overflow-wrap: anywhere;
 }
 .placement-buttons {
