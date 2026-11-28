@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Foxwarm · Operator</title>
+    <link rel="stylesheet" href="./operator/console.css" />
+    <script type="module" src="./operator/console.js"></script>
+  </head>
+  <body>
+    <header>
+      <strong class="brand"><span aria-hidden="true">F</span> Foxwarm</strong><span class="wordmark">Operator</span
+      ><button id="signout" hidden>Sign out</button>
+    </header>
+    <main>
+      <section id="signin">
+        <p class="eyebrow">Deployment administration</p>
+        <h1>Operator sign-in</h1>
+        <form id="access">
+          <label for="token">Operator access token</label
+          ><input id="token" type="password" required autocomplete="off" spellcheck="false" /><button
+            class="primary"
+          >
+            Sign in
+          </button>
+        </form>
+      </section>
+      <p id="notice" role="status" aria-live="polite"></p>
+      <section id="workspace" hidden>
+        <div class="heading">
+          <div>
+            <p class="eyebrow">Deployment</p>
+            <h1>Overview</h1>
+          </div>
+          <button id="refresh">Refresh</button>
+        </div>
+        <nav aria-label="Overview">
+          <button id="showTenants" aria-pressed="true">Tenants</button
+          ><button id="showReplicas" aria-pressed="false">Replicas</button>
+        </nav>
+        <section id="tenants">
+          <h2>Tenants</h2>
+          <div class="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tenant</th>
+                  <th>State</th>
+                  <th>Owner</th>
+                  <th>Hot Sessions</th>
+                  <th>Busy Sessions</th>
+                </tr>
+              </thead>
+              <tbody id="tenantRows"></tbody>
+            </table>
+          </div>
+        </section>
+        <section id="replicas" hidden>
+          <h2>Replicas</h2>
+          <div class="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Replica</th>
+                  <th>Role</th>
+                  <th>Version</th>
+                  <th>Draining</th>
+                  <th>Last heartbeat</th>
+                </tr>
+              </thead>
+              <tbody id="replicaRows"></tbody>
+            </table>
+          </div>
+        </section>
+        <section id="detail" hidden>
+          <div class="heading">
+            <div>
+              <p class="eyebrow">Tenant settings</p>
+              <h2 id="name"></h2>
+              <p class="muted" id="identity"></p>
+            </div>
+            <button id="stateAction"></button>
+          </div>
+          <p id="providerStatus" class="muted"></p>
+          <form id="settings">
+            <fieldset id="fields">
+              <legend>Limits</legend>
+              <p class="muted">Leave a limit blank to use its default.</p>
+              <div id="limits" class="grid"></div>
+              <details>
+                <summary>More limits</summary>
+                <div id="moreLimits" class="grid"></div>
+              </details>
+              <h3>Journal</h3>
+              <div class="grid">
+                <label
+                  >Recording<select id="recording">
+                    <option value="">Deployment default</option>
+                    <option value="true">On</option>
+                    <option value="false">Off</option>
+                  </select></label
+                ><label
+                  >Retention<select id="retentionMode">
+                    <option value="default">Deployment default</option>
+                    <option value="days">Keep for a set number of days</option>
+                    <option value="unlimited">Keep indefinitely</option>
+                  </select></label
+                ><label id="daysLabel" hidden
+                  >Number of days<input type="number" min="1" step="1" id="retention"
+                /></label>
+              </div>
+            </fieldset>
+            <button class="primary" id="save">Save settings</button>
+          </form>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

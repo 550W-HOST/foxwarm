@@ -113,6 +113,13 @@ public sealed class OperatorProcessTests
             Assert.Equal(HttpStatusCode.Unauthorized, (await Send(client, HttpMethod.Get, api + "/tenants", bearer: "fwop_" + new string('0', 64))).Status);
             Assert.Equal(HttpStatusCode.NotFound, (await Send(client, HttpMethod.Get, api + "/tenants", "alpha.test", op)).Status);
             Assert.Equal(HttpStatusCode.NotFound, (await Send(client, HttpMethod.Post, origin + "/api/auth", bearer: op)).Status);
+            var shell = await Send(client,HttpMethod.Get,origin+"/");
+            Assert.Equal(HttpStatusCode.OK,shell.Status);
+            Assert.Contains("./operator/console.js",shell.Text);
+            Assert.DoesNotContain(op,shell.Text);
+            Assert.Equal(HttpStatusCode.OK,(await Send(client,HttpMethod.Get,origin+"/operator/console.js")).Status);
+            Assert.Equal(HttpStatusCode.OK,(await Send(client,HttpMethod.Get,origin+"/operator/console.css")).Status);
+            Assert.Equal(HttpStatusCode.NotFound,(await Send(client,HttpMethod.Get,origin+"/", "alpha.test")).Status);
             var unknown = await Send(client,HttpMethod.Get,api+"/unknown");
             Assert.Equal(HttpStatusCode.NotFound,unknown.Status); Assert.Equal("",unknown.Text);
             using (var foreign = new HttpRequestMessage(HttpMethod.Get,api+"/tenants"))
@@ -189,6 +196,7 @@ public sealed class OperatorProcessTests
             var reusable = (string)exchanges.Single(x => x.Status == HttpStatusCode.OK).Json["instanceToken"]!;
             Assert.Equal(HttpStatusCode.OK, (await AsAdmin(reusable, "/api/auth/session")).Status);
             Assert.Equal(HttpStatusCode.NotFound, (await AsAdmin(reusable, OperatorServer.Path + "/tenants")).Status);
+            Assert.Equal(HttpStatusCode.NotFound, (await AsAdmin(reusable, "/operator/console.js")).Status);
             Assert.Equal(HttpStatusCode.Unauthorized, (await AsAdmin(op, "/api/auth/session")).Status);
             await Until(async () => (await Call(HttpMethod.Get, "/placement")).Json["tenants"]!.AsArray().Any(x => (string?)x?["slug"] == "alpha" && x["hot"] != null));
             var place = (await Call(HttpMethod.Get, "/placement")).Json;
