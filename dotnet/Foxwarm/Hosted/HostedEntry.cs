@@ -364,6 +364,8 @@ internal static class HostedEntry
             publicListener?.Dispose();
         token.ThrowIfCancellationRequested();
         var distRoot = HttpAssets.WebUiDirectory(paths, validate: http.WebUiEnabled);
+        var providers = await new Providers.ProviderGrants(deployment)
+            .LoadAsync(tenant.Database, bootstrap.Tenant, profile, token).ConfigureAwait(false);
         var host = await MainHost
             .CreateAsync(
                 [],
@@ -373,7 +375,7 @@ internal static class HostedEntry
                 captureDiagnostics: true,
                 storage: storage,
                 // Both profiles take the tenant's limits from its row.
-                capabilities: RuntimeCapabilities.For(profile, deployment.Egress) with { Limits = limits },
+                capabilities: RuntimeCapabilities.For(profile, deployment.Egress) with { Limits = limits, Providers = providers },
                 jsonStdoutLog: true,
                 logTenant: bootstrap.Tenant,
                 schedule: schedule
