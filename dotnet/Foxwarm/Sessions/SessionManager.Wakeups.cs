@@ -5,6 +5,8 @@ internal sealed partial class SessionManager
     private Foxwarm.Timers.IProducerAdmission? producers;
     internal Foxwarm.Terminal.TerminalRegistry? LocalTerminals { get; set; }
 
+    internal Foxwarm.Timers.IProducerAdmission? ScheduledProducers => producers;
+
     internal void EnableScheduledProducers(Foxwarm.Timers.RuntimeSchedule schedule)
     {
         producers = schedule.Admission;
@@ -30,12 +32,16 @@ internal sealed partial class SessionManager
         }
     }
 
-    internal Task StopWakeupProducersAsync()
+    internal async Task StopWakeupProducersAsync()
     {
         timers.StopFuture();
         waitTimeouts.Stop();
         waitLiveness.Stop();
-        return ManagedChannels?.StopIngressAsync() ?? Task.CompletedTask;
+        if (ManagedChannels is { } channels)
+        {
+            if (!await channels.SettleHostedPollersAsync().ConfigureAwait(false)) BeginShutdown();
+            await channels.StopIngressAsync().ConfigureAwait(false);
+        }
     }
 
     internal async Task SettleWakeupProducersAsync()

@@ -84,7 +84,7 @@ internal sealed class WeixinChannel : IManagedChannel
     {
         stopped = true;
         // Source's outer-loop signal is not passed to fetch or its backoff delay.
-        if (polling is not null && !ReferenceEquals(handling.Value, this))
+        if (polling is not null && !ReferenceEquals(handling.Value, this) && cursors?.StopPolling.IsCancellationRequested != true)
             await polling;
     }
 

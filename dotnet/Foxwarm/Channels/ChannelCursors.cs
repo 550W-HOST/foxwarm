@@ -13,6 +13,28 @@ internal sealed class ChannelCursors(IStateDocuments documents)
     internal CancellationToken StopPolling => stopPolling.Token;
     private readonly CancellationTokenSource checkpointsClosed = new();
     internal CancellationToken Closing => checkpointsClosed.Token;
+    private Task<bool>? settled;
+
+    internal Task<bool> SettleHostedAsync()
+    {
+        lock (gate) return settled ??= SettleCoreAsync();
+    }
+
+    private async Task<bool> SettleCoreAsync()
+    {
+        await stopPolling.CancelAsync().ConfigureAwait(false);
+        try
+        {
+            await DrainedAsync().WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            await checkpointsClosed.CancelAsync().ConfigureAwait(false);
+            return false;
+        }
+    }
+
     internal async Task CloseAsync()
     {
         await checkpointsClosed.CancelAsync().ConfigureAwait(false);
