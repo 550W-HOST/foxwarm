@@ -62,6 +62,9 @@ internal sealed partial class MainTimers
         }
     }
 
+    private bool reconciled;
+    internal bool Reconciled { get { lock (gate) return reconciled; } }
+
     internal bool NeedsActiveRuntime(long now)
     {
         lock (gate)
