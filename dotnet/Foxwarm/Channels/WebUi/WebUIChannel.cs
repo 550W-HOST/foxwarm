@@ -240,7 +240,8 @@ internal sealed partial class WebUIChannel(
         new Foxwarm.Asr.AsrProxy(
             models.ConfigurationOwner,
             app.Lifetime.ApplicationStopping,
-            sessions.Capabilities.Egress
+            sessions.Capabilities.Egress,
+            sessions.UploadStaging
         ).Register(app);
         RegisterTerminalRoutes(app);
         RegisterAgentRoutes(app);

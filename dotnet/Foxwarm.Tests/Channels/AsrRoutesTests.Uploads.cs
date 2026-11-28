@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
@@ -6,6 +7,60 @@ namespace Foxwarm.Tests;
 
 public sealed partial class AsrRoutesTests
 {
+    [Fact]
+    public async Task SpeechAndAttachmentsShareMultipartSlots()
+    {
+        await using var f = await Fixture.Create(capabilities: RuntimeCapabilities.Hosted with { Egress = Foxwarm.Net.EgressPolicy.Unguarded });
+        var both = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = 0;
+        f.Upload = async context =>
+        {
+            if (Interlocked.Increment(ref started) == 2) both.TrySetResult();
+            await release.Task.WaitAsync(context.RequestAborted);
+            await context.Response.WriteAsJsonAsync(new { text = "done" });
+        };
+        using var audio1 = f.Audio(100000);
+        using var audio2 = f.Audio(100000);
+        var first = f.Client.PostAsync("api/asr/transcribe", audio1);
+        var second = f.Client.PostAsync("api/asr/transcribe", audio2);
+        try
+        {
+            await both.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            using var upload = new MultipartFormDataContent { { new ByteArrayContent([1]), "file", "sample.bin" } };
+            using var denied = await f.Client.PostAsync("api/upload", upload);
+            Assert.Equal(HttpStatusCode.TooManyRequests, denied.StatusCode);
+            using var audio3 = f.Audio(44);
+            // Refusal has to occur before forwarding to the peer.
+            using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var busy = await f.Client.PostAsync("api/asr/transcribe", audio3, bound.Token);
+            Assert.Equal(HttpStatusCode.TooManyRequests, busy.StatusCode);
+            Assert.Equal(2, started);
+        }
+        finally { release.TrySetResult(); await Task.WhenAll(first, second); }
+        using var next = new MultipartFormDataContent { { new ByteArrayContent([1]), "file", "sample.bin" } };
+        using var accepted = await f.Client.PostAsync("api/upload", next);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+    }
+
+    [Fact]
+    public async Task FailedStagingCreationDoesNotConsumePendingSpace()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var f = await Fixture.Create(capabilities: RuntimeCapabilities.Hosted with { Limits = Foxwarm.Limits.TenantLimits.Defaults with { UploadBytes = 8 } });
+        async Task<HttpStatusCode> Send(string name)
+        {
+            using var contents = new MultipartFormDataContent { { new ByteArrayContent(new byte[8]), "file", name } };
+            using var result = await f.Client.PostAsync("api/upload", contents);
+            return result.StatusCode;
+        }
+        // The multipart filename is valid. Adding the random on-disk prefix puts this
+        // component over NAME_MAX, so CreateNew and a subsequent File.Delete both fail.
+        Assert.Equal(HttpStatusCode.BadRequest, await Send("a." + new string('x', 230)));
+        Assert.Equal(HttpStatusCode.OK, await Send("first.bin"));
+        Assert.Equal(HttpStatusCode.OK, await Send("second.bin"));
+    }
+
     [Theory]
     [InlineData(8, 200)]
     [InlineData(9, 413)]

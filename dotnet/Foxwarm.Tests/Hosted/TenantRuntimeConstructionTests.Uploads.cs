@@ -77,6 +77,27 @@ public sealed class HostedUploadStagingTests
         Assert.True(staging.Reserve(FileAt(3), 0));
     }
 
+    [Fact]
+    public void FailedCleanupReleasesAnUncreatedFileButKeepsPhysicalBytesCharged()
+    {
+        using var root = new TempDirectory();
+        using var staging = new Foxwarm.Channels.WebUi.HostedUploadStaging(root.Path, 8);
+        Directory.CreateDirectory(staging.Root);
+        var a = Path.Combine(staging.Root, "a");
+        var b = Path.Combine(staging.Root, "b");
+        Assert.True(staging.Reserve(a, 8));
+        Assert.True(staging.Reserve(b, 8));
+        static void Fail() => throw new IOException("injected cleanup failure");
+        Assert.Throws<IOException>(() => staging.CancelWrite(a, created: false, Fail));
+        Assert.True(staging.Reserve(a, 8));
+        File.WriteAllBytes(b, new byte[8]);
+        Assert.Throws<IOException>(() => staging.CancelWrite(b, created: true, Fail));
+        Assert.False(staging.Reserve(Path.Combine(staging.Root, "c"), 8));
+        staging.Sweep(DateTimeOffset.UtcNow.AddDays(1));
+        Assert.False(File.Exists(b));
+        Assert.True(staging.Reserve(b, 8));
+    }
+
     private sealed class ResponseLifecycle : Microsoft.AspNetCore.Http.Features.HttpResponseFeature
     {
         private readonly Stack<Func<Task>> callbacks = [];

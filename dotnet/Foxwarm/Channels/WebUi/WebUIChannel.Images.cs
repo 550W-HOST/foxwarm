@@ -103,6 +103,7 @@ internal sealed partial class WebUIChannel
                     );
                     if (staging is not null && !staging.Reserve(path, file.Length))
                         return Full();
+                    var created = false;
                     try
                     {
                         await using (
@@ -116,6 +117,7 @@ internal sealed partial class WebUIChannel
                             )
                         )
                         {
+                            created = true;
                             await file.CopyToAsync(output, context.RequestAborted);
                             await output.FlushAsync(context.RequestAborted);
                         }
@@ -125,7 +127,12 @@ internal sealed partial class WebUIChannel
                     }
                     catch
                     {
-                        uploads.DeleteStaged(path);
+                        void Cleanup()
+                        {
+                            if (created) uploads.DeleteStaged(path);
+                        }
+                        if (staging is null) Cleanup();
+                        else staging.CancelWrite(path, created, Cleanup);
                         throw;
                     }
                     return Results.Ok(
