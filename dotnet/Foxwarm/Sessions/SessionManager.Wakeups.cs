@@ -3,6 +3,7 @@ namespace Foxwarm.Sessions;
 internal sealed partial class SessionManager
 {
     private Foxwarm.Timers.IProducerAdmission? producers;
+    internal Foxwarm.Terminal.TerminalRegistry? LocalTerminals { get; set; }
 
     internal void EnableScheduledProducers(Foxwarm.Timers.RuntimeSchedule schedule)
     {
@@ -17,7 +18,7 @@ internal sealed partial class SessionManager
         get
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (!accepting || !deferredRecovery.IsCompleted || ManagedChannels?.HasLiveTransport == true
+            if (!accepting || LocalTerminals?.HasLiveShells == true || !deferredRecovery.IsCompleted || ManagedChannels?.HasLiveTransport == true
                 || Nodes.HasConnections || ToolScript.HasActiveRuns || executor.TrackedCount != 0
                 || waitTimeouts.DueWithin(now + (long)Foxwarm.Timers.MainTimers.WakeLead.TotalMilliseconds)
                 || timers.NeedsActiveRuntime(now))
