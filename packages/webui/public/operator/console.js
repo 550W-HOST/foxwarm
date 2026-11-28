@@ -190,7 +190,7 @@ async function refresh() {
     drain.disabled = replica.draining
     drain.onclick = () =>
       perform(async () => {
-        if (!confirm(`Drain ${replica.id}? It will stop accepting tenants and move its current tenants to other replicas when one is available.`)) return
+        if (!confirm(`Drain ${replica.id}? Its tenants move to other replicas when one is available. It keeps serving any tenant that has nowhere else to go.`)) return
         await api('replicas/drain', 'POST', JSON.stringify({ boot: replica.id }))
         await refresh()
         notice('Replica drain requested.')
