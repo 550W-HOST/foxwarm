@@ -219,7 +219,7 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
     {
         try
         {
-            return JsonNode.Parse(frame);
+            return JsonNode.Parse(frame, documentOptions: ExecutableNodeProvider.ResponseOptions);
         }
         catch (JsonException)
         {
@@ -290,7 +290,7 @@ internal sealed class ProviderServiceChannel : IAsyncDisposable
         JsonObject message;
         try
         {
-            message = ExecutableNodeProvider.Object(JsonNode.Parse(frame));
+            message = ExecutableNodeProvider.Object(JsonNode.Parse(frame, documentOptions: ExecutableNodeProvider.ResponseOptions));
         }
         catch (Exception error) when (error is JsonException or NodeProviderException)
         {
