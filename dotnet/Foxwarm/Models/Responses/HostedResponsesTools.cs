@@ -25,6 +25,8 @@ internal static class HostedResponsesTools
 {
     internal const int MaxImageBytes = 32 * 1024 * 1024;
     internal const int MaxResponseBytes = 64 * 1024 * 1024;
+    internal const int MaxWireEventBytes = 96 * 1024 * 1024;
+    internal const int MaxWireResponseBytes = 256 * 1024 * 1024;
     internal const int MaxImages = 8;
     private static readonly string[] SafeImageKeys =
     [

@@ -13,7 +13,9 @@ internal static class OpenAISseReader
         ResponsesStreamCallbacks? callbacks,
         StreamOwnership ownership,
         Func<bool>? completed = null,
-        bool flushFinalEvent = false
+        bool flushFinalEvent = false,
+        int eventBytes = 8 * 1024 * 1024,
+        int responseBytes = 32 * 1024 * 1024
     )
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -35,47 +37,34 @@ internal static class OpenAISseReader
         var decoder = new UTF8Encoding(false, false).GetDecoder();
         var bytes = new byte[4096];
         var chars = new char[8192];
-        var pending = "";
-        void Append(string text)
+        using var pending = new MemoryStream();
+        var total = 0L;
+        var afterNewline = false;
+        var afterCr = false;
+
+        void Add(ReadOnlySpan<byte> part)
         {
-            if (text.Length == 0)
-                return;
-            callbacks?.OnDecodedChunk?.Invoke(text);
-            pending += text;
-            pending = pending.Replace("\r\n", "\n", StringComparison.Ordinal);
-            while (true)
-            {
-                var boundary = pending.IndexOf("\n\n", StringComparison.Ordinal);
-                if (boundary < 0)
-                    return;
-                var block = pending[..boundary];
-                pending = pending[(boundary + 2)..];
-                callbacks?.OnSseBlock?.Invoke(block);
-                var lines = block
-                    .Replace("\r", "", StringComparison.Ordinal)
-                    .Split('\n')
-                    .Where(line => line.StartsWith("data:", StringComparison.Ordinal))
-                    .Select(line => OpenAIRequestText.TrimStart(line[5..]))
-                    .ToArray();
-                if (lines.Length == 0)
-                    continue;
-                var payload = string.Join("\n", lines);
-                if (payload.Length == 0 || payload == "[DONE]")
-                    continue;
-                JsonNode? parsed;
-                try
-                {
-                    parsed = JsonNode.Parse(payload);
-                }
-                catch (JsonException error)
-                {
-                    throw new MalformedSseEventJsonException(block, error);
-                }
-                if (parsed is JsonObject obj)
-                    consume(obj);
-                if (completed?.Invoke() == true)
-                    return;
-            }
+            if (pending.Length + part.Length > eventBytes)
+                throw new InvalidDataException("Model response event exceeds the size limit.");
+            pending.Write(part);
+        }
+
+        void Emit(bool delimited)
+        {
+            var block = Encoding.UTF8.GetString(pending.GetBuffer(), 0, (int)pending.Length)
+                .Replace("\r\n", "\n", StringComparison.Ordinal);
+            pending.SetLength(0);
+            if (delimited) block = block[..^2];
+            callbacks?.OnSseBlock?.Invoke(block);
+            var lines = block.Replace("\r", "", StringComparison.Ordinal).Split('\n')
+                .Where(line => line.StartsWith("data:", StringComparison.Ordinal))
+                .Select(line => OpenAIRequestText.TrimStart(line[5..]));
+            var payload = string.Join("\n", lines);
+            if (payload.Length == 0 || payload == "[DONE]") return;
+            JsonNode? parsed;
+            try { parsed = JsonNode.Parse(payload); }
+            catch (JsonException error) { throw new MalformedSseEventJsonException(block, error); }
+            if (parsed is JsonObject obj) consume(obj);
         }
         try
         {
@@ -102,25 +91,33 @@ internal static class OpenAISseReader
                 {
                     throw new ResponsesStreamReadException(error);
                 }
-                decoder.Convert(
-                    bytes.AsSpan(0, count),
-                    chars,
-                    count == 0,
-                    out var consumed,
-                    out var written,
-                    out _
-                );
-                if (consumed != count)
-                    throw new InvalidDataException(
-                        "SSE decoder did not consume the complete input chunk."
-                    );
-                Append(new string(chars, 0, written));
-                if (completed?.Invoke() == true)
-                    return;
+                if ((total += count) > responseBytes)
+                    throw new InvalidDataException("Model response exceeds the size limit.");
+                if (callbacks?.OnDecodedChunk is { } chunk)
+                {
+                    var written = decoder.GetChars(bytes, 0, count, chars, 0, flush: count == 0);
+                    if (written != 0) chunk(new string(chars, 0, written));
+                }
+                var start = 0;
+                for (var i = 0; i < count; i++)
+                {
+                    var current = bytes[i];
+                    if (current == '\n' && afterNewline)
+                    {
+                        Add(bytes.AsSpan(start, i + 1 - start));
+                        Emit(delimited: true);
+                        if (completed?.Invoke() == true) return;
+                        start = i + 1;
+                        afterNewline = false;
+                    }
+                    else
+                        afterNewline = current == '\n' || (afterNewline && !afterCr && current == '\r');
+                    afterCr = current == '\r';
+                }
+                Add(bytes.AsSpan(start, count - start));
                 if (count == 0)
                 {
-                    if (flushFinalEvent && pending.Trim().Length > 0)
-                        Append("\n\n");
+                    if (flushFinalEvent && pending.Length != 0) Emit(delimited: false);
                     return;
                 }
             }

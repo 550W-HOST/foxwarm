@@ -834,7 +834,8 @@ public static class ResponsesSseCollector
     {
         var accumulator = new ResponsesEventAccumulator(callbacks);
         await OpenAISseReader
-            .ReadAsync(stream, cancellationToken, accumulator.Consume, callbacks, ownership)
+            .ReadAsync(stream, cancellationToken, accumulator.Consume, callbacks, ownership,
+                eventBytes: HostedResponsesTools.MaxWireEventBytes, responseBytes: HostedResponsesTools.MaxWireResponseBytes)
             .ConfigureAwait(false);
         return accumulator.CompleteAtEof();
     }

@@ -88,8 +88,8 @@ internal sealed partial class WeixinApi
             request.Headers.TryAddWithoutValidation("SKRouteTag", routeTag.Trim());
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop);
         timeout.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(0, timeoutMs)));
-        using var response = await http.SendAsync(request, timeout.Token);
-        var raw = await response.Content.ReadAsStringAsync(timeout.Token);
+        using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+        var raw = await Net.BoundedResponse.ReadTextAsync(response.Content, response.IsSuccessStatusCode ? Net.BoundedResponse.JsonBytes : Net.BoundedResponse.ErrorBytes, timeout.Token);
         if (!response.IsSuccessStatusCode)
             throw new WeixinHttpException(
                 (int)response.StatusCode,

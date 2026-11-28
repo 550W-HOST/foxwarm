@@ -129,8 +129,8 @@ internal sealed partial class WeixinApi
             : new CancellationTokenSource();
         try
         {
-            using var response = await http.SendAsync(request, timeout.Token);
-            var raw = await response.Content.ReadAsStringAsync(timeout.Token);
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            var raw = await Net.BoundedResponse.ReadTextAsync(response.Content, response.IsSuccessStatusCode ? Net.BoundedResponse.JsonBytes : Net.BoundedResponse.ErrorBytes, timeout.Token);
             if (!response.IsSuccessStatusCode)
                 throw new IOException(
                     (poll ? "Failed to poll QR status: " : "Failed to fetch QR code: ")
