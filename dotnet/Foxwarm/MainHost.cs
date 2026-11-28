@@ -100,7 +100,8 @@ internal sealed class MainHost : IAsyncDisposable
         // Hosted mode: log lines also go to stdout as JSON lines (MainLog).
         bool jsonStdoutLog = false,
         // Hosted mode: the tenant this runtime's log lines carry.
-        string? logTenant = null
+        string? logTenant = null,
+        Foxwarm.Timers.RuntimeSchedule? schedule = null
     ) =>
         CreateAsync(
             args,
@@ -114,7 +115,8 @@ internal sealed class MainHost : IAsyncDisposable
             storage: storage,
             capabilities: capabilities,
             jsonStdoutLog: jsonStdoutLog,
-            logTenant: logTenant
+            logTenant: logTenant,
+            schedule: schedule
         );
 
     internal static async Task<MainHost> CreateAsync(
@@ -132,7 +134,8 @@ internal sealed class MainHost : IAsyncDisposable
         // The runtime's features; null is file mode's full profile.
         RuntimeCapabilities? capabilities = null,
         bool jsonStdoutLog = false,
-        string? logTenant = null
+        string? logTenant = null,
+        Foxwarm.Timers.RuntimeSchedule? schedule = null
     )
     {
         capabilities ??= RuntimeCapabilities.File;
@@ -187,6 +190,8 @@ internal sealed class MainHost : IAsyncDisposable
         IHost? headless = null;
         try
         {
+            if (schedule is not null)
+                sessions.EnableScheduledProducers(schedule);
             await sessions.LoadMainHostAsync();
             if (capabilities.MainTerminalsAndCode)
                 terminals = new TerminalRegistry(dataRoot, CancellationToken.None);
@@ -241,6 +246,8 @@ internal sealed class MainHost : IAsyncDisposable
             // Every step runs even when an earlier one fails; a failed step leaves services that
             // may still run, which the caller must know (a hosted owner then releases nothing).
             List<Exception> failures = [];
+            if (schedule is not null)
+                await Step(schedule.Admission.AbortStartupAsync);
             await Step(() =>
             {
                 sessions.BeginShutdown();
