@@ -163,6 +163,21 @@ For an existing hosted tenant that used a separate Agents volume, stop its repli
 
 `drills/run.mjs` checks the failover contracts against local processes or this Compose stack: a turn interrupted by killing the owner, a database partition, the upgrade refusals, a rolling update and an import. CI runs them on the Compose stack with `check-render.sh`, which validates the Compose files and the Helm chart, and `kind/check.mjs`, which installs the chart on a kind cluster and checks the migration hook, the probes and a takeover after the owner pod is deleted. See [hosted packaging](../../docs/code-index/units/hosted-packaging.md).
 
+## The master host
+
+Enable the master host only if the deployment has an operator tenant. It runs trusted operator Agents with local exec, Code, terminals, the Main browser and stdio MCP. It carries the runtime database credentials and KEK, and serves only the operator profile. Set configuration through Setup or `ctl config`; the operator's structured configuration is stored in PostgreSQL.
+
+Build the `master-host` target with the Code workbench package from the matching Foxwarm version. Place `foxwarm-code-<version>.fwassets` in its own directory and supply it as the `code` build context:
+
+```sh
+docker build --target master-host --build-context code=./code-package -t foxwarm-master:local .
+docker compose -f deploy/hosted/compose.yaml --profile master up -d
+```
+
+Set `FOXWARM_MASTER_IMAGE` for a different image reference. The mount root `/master` is `FOXWARM_AGENTS_DIR`; it holds numeric tenant folders and `/master/scratch`. The master uses the full Linux runtime image (including git, Python, Node.js and Chromium), the normal browser sandbox and a persistent `master` volume. The ordinary `hosted` image has no Agent tools and no master volume. Compose generates its mesh secret with the base stack secrets; for an older secrets directory, provision `secrets/mesh-secret` with a base64-encoded 32-byte random value matching the other mesh participants. For direct testing use the master replica's listener and the tenant's registered hostname. Routing from general replicas is handled by the shared forwarding layer.
+
+In Helm, set `masterHost.enabled=true`, `masterHost.image` to the full image reference and `mesh.secretName` to an existing Secret containing the `mesh-secret` file. Set `masterHost.storage` and optionally `masterHost.storageClassName`. Install `docker/seccomp-chromium.json` on eligible Kubernetes nodes under the kubelet's seccomp directory at `masterHost.chromiumSeccompProfile`. The chart creates one `foxwarm-master` StatefulSet pod with a ReadWriteOnce claim. Upgrades replace ordinal zero without surge. A stopped pod or a volume reattachment is operator downtime; general tenants keep their existing owners. Back up the claim: live terminal processes don't survive restart, but Agent files, Code workspace and exec logs do.
+
 ### Operator Agent folders
 
 The master host opens Agent folders under `FOXWARM_AGENTS_DIR/<tenant_id>/`. The numeric directory belongs to that database tenant for its entire lifetime. Back up the master volume alongside its structured state. After replacing or deleting the operator tenant, preserve or remove its old directory explicitly. A replacement gets its own directory.
