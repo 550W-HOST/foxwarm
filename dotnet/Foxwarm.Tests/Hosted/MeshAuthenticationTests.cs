@@ -60,7 +60,8 @@ public sealed class MeshAuthenticationTests
         var auth = new MeshAuthentication(RandomNumberGenerator.GetBytes(32), "owner", clock, nonceLimit: 2);
         HttpRequest New() => Request(auth.Sign("dispatch", "owner", "alpha", 7, "GET", "Alpha.test:81", "/").Header, "/");
         var a = New();
-        var b = New();
+        var control = auth.Sign("activate", "owner", "alpha", null, "POST", "Alpha.test:81", "/");
+        var b = Request(control.Header, "/", "POST");
         Assert.NotNull(auth.Accept(a, out _));
         Assert.NotNull(auth.Accept(b, out _));
         Assert.Null(auth.Accept(New(), out var full));
@@ -70,6 +71,31 @@ public sealed class MeshAuthenticationTests
         clock.Now = clock.Now.AddSeconds(61);
         Assert.NotNull(auth.Accept(New(), out full));
         Assert.False(full);
+    }
+
+    [Fact]
+    public void DispatchAndActivationKeepSeparateRoomAcrossTenants()
+    {
+        var clock = new Clock();
+        var auth = new MeshAuthentication(RandomNumberGenerator.GetBytes(32), "owner", clock, nonceLimit: 4);
+        MeshAttempt? Send(string tenant, bool activate, out bool full)
+        {
+            var host = tenant + ".test";
+            var method = activate ? "POST" : "GET";
+            var signed = auth.Sign(activate ? "activate" : "dispatch", "owner", tenant, activate ? null : 1, method, host, "/");
+            return auth.Accept(Request(signed.Header, "/", method, host), out full);
+        }
+        Assert.NotNull(Send("a", false, out _));
+        Assert.NotNull(Send("b", false, out _));
+        Assert.NotNull(Send("c", false, out _));
+        Assert.Null(Send("d", false, out var full));
+        Assert.True(full);
+        Assert.NotNull(Send("d", true, out _));
+        clock.Now = clock.Now.AddSeconds(61);
+        Assert.NotNull(Send("a", true, out _));
+        Assert.Null(Send("b", true, out full));
+        Assert.True(full);
+        Assert.NotNull(Send("d", false, out _));
     }
 
     private static HttpRequest Request(string header, string target, string method = "GET", string authority = "Alpha.test:81")

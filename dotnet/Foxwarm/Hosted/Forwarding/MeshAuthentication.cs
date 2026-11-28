@@ -19,7 +19,42 @@ internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? 
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
     private readonly object gate = new();
     private readonly HashSet<UInt128> seen = [];
-    private readonly PriorityQueue<UInt128, long> expiry = new();
+    private readonly PriorityQueue<(UInt128 Nonce, NonceShare Share), long> expiry = new();
+    private readonly NoncePool dispatch = new(nonceLimit - ActivationReserve(nonceLimit), Math.Max(1, nonceLimit / 8));
+    private readonly NoncePool activation = new(ActivationReserve(nonceLimit), Math.Max(1, ActivationReserve(nonceLimit) / 8));
+
+    private static int ActivationReserve(int limit) => Math.Max(1, limit / 16);
+
+    // Used under gate. Entries in the expiry queue share the tenant key and counters.
+    private sealed class NonceShare(NoncePool pool, string tenant)
+    {
+        internal readonly NoncePool Pool = pool;
+        internal readonly string Tenant = tenant;
+        internal int Used;
+    }
+
+    private sealed class NoncePool(int capacity, int tenantLimit)
+    {
+        private readonly Dictionary<string, NonceShare> tenants = new(StringComparer.Ordinal);
+        private int used;
+
+        internal NonceShare? TryTake(string tenant)
+        {
+            if (used >= capacity) return null;
+            if (!tenants.TryGetValue(tenant, out var share))
+                tenants.Add(tenant, share = new NonceShare(this, tenant));
+            if (share.Used >= tenantLimit) return null;
+            used++;
+            share.Used++;
+            return share;
+        }
+
+        internal void Expire(NonceShare share)
+        {
+            used--;
+            if (--share.Used == 0) tenants.Remove(share.Tenant);
+        }
+    }
 
     internal (MeshAttempt Attempt, string Header) Sign(string purpose, string receiver, string tenant, long? epoch,
         string method, string authority, string target)
@@ -62,17 +97,19 @@ internal sealed class MeshAuthentication(byte[] key, string boot, TimeProvider? 
             while (expiry.TryPeek(out var old, out var until) && until < now)
             {
                 expiry.Dequeue();
-                seen.Remove(old);
+                seen.Remove(old.Nonce);
+                old.Share.Pool.Expire(old.Share);
             }
             var nonce = UInt128.Parse(f[7], NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
             if (seen.Contains(nonce)) return null;
-            if (seen.Count >= nonceLimit)
+            var share = (f[1] == "activate" ? activation : dispatch).TryTake(f[4]);
+            if (share is null)
             {
                 full = true;
                 return null;
             }
             seen.Add(nonce);
-            expiry.Enqueue(nonce, now + 2 * SkewSeconds);
+            expiry.Enqueue((nonce, share), now + 2 * SkewSeconds);
         }
         return new(f[1], f[2], f[3], f[4], epoch, f[7]);
     }
