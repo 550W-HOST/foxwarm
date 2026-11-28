@@ -7,7 +7,7 @@ Secondary files: `dotnet/Foxwarm/Hosted/HostedEntry.cs`, `dotnet/Foxwarm/Hosted/
 
 ## Process and authorization
 
-The operator provisions tenants. Each tenant receives a subdomain of a shared base domain. Third-party tenants require the external security review (2026-11-27).
+The operator provisions tenants and maintains the S3 [Agent blob inventory](./hosted-agent-store.md#d-agent-store-limits). Each tenant receives a subdomain of a shared base domain. Third-party tenants require the external security review (2026-11-27).
 
 `foxwarm operator serve` is a separate process in the hosted image. It opens no tenant runtime, serves the console at its origin root and the API at `/operator/v1`, checks the schema and the actual connection role against `schema_info.operator_role`, and loads the KEK. Its Kestrel listener binds `bot.httpHost` and `operator.port`; `operator.url` is its externally visible origin. Requests must address that host and port. A browser that sends an Origin must match it. TLS termination belongs to the ingress. The operator refuses to start if its canonical hostname is assigned to a tenant, including P1’s configured public hostname. Host comparisons ignore case and the terminal DNS dot. Unknown routes return an empty 404 before authentication. The replica front rejects the reserved hostname and both root and deployment-mounted operator paths before tenant resolution, admission or rate limits. The [packaging](./hosted-packaging.md) gives the two roles separate services and separate database secrets.
 

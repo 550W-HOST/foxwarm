@@ -20,6 +20,8 @@ internal sealed partial class PostgresStorageContext : Foxwarm.Limits.IBlobUsage
         return bytes;
     }
 
+    private Amazon.S3.AmazonS3Client? agentBlobClient;
+
     internal const string ImageBlobsName = "images";
     internal const string ArtifactBlobsName = "artifacts";
 
@@ -55,8 +57,10 @@ internal sealed partial class PostgresStorageContext : Foxwarm.Limits.IBlobUsage
         s3Client = client;
         imageBlobs = new S3BlobStore(client, settings.Bucket, tenant, ImageBlobsName, conditional);
         artifactBlobs = new S3BlobStore(client, settings.Bucket, tenant, ArtifactBlobsName, conditional);
+        var (user, secret) = settings.ReadCredentials();
+        agentBlobClient = S3Blobs.Client(settings, user, secret, singleAttempt: true);
         agentFileBlobs = new S3BlobStore(
-            client,
+            agentBlobClient,
             settings.Bucket,
             tenant,
             PgAgentFileStore.BlobStoreName,

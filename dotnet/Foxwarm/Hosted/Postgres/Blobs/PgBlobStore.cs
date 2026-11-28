@@ -76,48 +76,14 @@ internal sealed class PgBlobStore(TenantDb database, string store) : IBlobStore
     )
     {
         var sha256 = SHA256.HashData(content.Span);
-        var chunks = (content.Length + ChunkBytes - 1) / ChunkBytes;
         var created = false;
         return await database
             .WriteAsync(
                 async (tx, cancel) =>
                 {
                     created = false;
-                    var inserted = await tx.ExecuteAsync(
-                            "INSERT INTO blob_objects (store, key, byte_length, chunk_count, sha256)"
-                                + " VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
-                            cancel,
-                            store,
-                            key,
-                            (long)content.Length,
-                            chunks,
-                            sha256
-                        )
-                        .ConfigureAwait(false);
-                    if (inserted == 0)
-                        return keepExisting
-                            ? false
-                            : throw new IOException($"The blob {key} already exists.");
-                    for (var index = 0; index < chunks; index++)
-                    {
-                        var start = index * ChunkBytes;
-                        await tx.ExecuteAsync(
-                                "INSERT INTO blob_chunks (store, key, chunk, data) VALUES ($1, $2, $3, $4)",
-                                cancel,
-                                store,
-                                key,
-                                index,
-                                new NpgsqlParameter<ReadOnlyMemory<byte>>
-                                {
-                                    TypedValue = content.Slice(
-                                        start,
-                                        Math.Min(ChunkBytes, content.Length - start)
-                                    ),
-                                }
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    created = true;
+                    created = await CreateInAsync(tx, store, key, content, sha256, keepExisting, cancel).ConfigureAwait(false);
+                    if (!created) return false;
                     BeforeCommit?.Invoke();
                     return true;
                 },
@@ -138,6 +104,47 @@ internal sealed class PgBlobStore(TenantDb database, string store) : IBlobStore
                 token
             )
             .ConfigureAwait(false);
+    }
+
+    internal static async Task<bool> CreateInAsync(PgTx tx, string store, string key, ReadOnlyMemory<byte> content,
+        byte[] sha256, bool keepExisting, CancellationToken cancel)
+    {
+        var chunks = (int)(((long)content.Length + ChunkBytes - 1) / ChunkBytes);
+        var inserted = await tx.ExecuteAsync(
+                "INSERT INTO blob_objects (store, key, byte_length, chunk_count, sha256)"
+                    + " VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+                cancel,
+                store,
+                key,
+                (long)content.Length,
+                chunks,
+                sha256
+            )
+            .ConfigureAwait(false);
+        if (inserted == 0)
+            return keepExisting
+                ? false
+                : throw new IOException($"The blob {key} already exists.");
+        for (var index = 0; index < chunks; index++)
+        {
+            var start = index * ChunkBytes;
+            await tx.ExecuteAsync(
+                    "INSERT INTO blob_chunks (store, key, chunk, data) VALUES ($1, $2, $3, $4)",
+                    cancel,
+                    store,
+                    key,
+                    index,
+                    new NpgsqlParameter<ReadOnlyMemory<byte>>
+                    {
+                        TypedValue = content.Slice(
+                            start,
+                            Math.Min(ChunkBytes, content.Length - start)
+                        ),
+                    }
+                )
+                .ConfigureAwait(false);
+        }
+        return true;
     }
 
     public Task<byte[]> ReadAllAsync(string key, CancellationToken token) =>

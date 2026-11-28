@@ -17,7 +17,7 @@ namespace Foxwarm.Hosted.Postgres;
 /// <c>agent_file_usage</c> row, which serializes the tenant's writes, allocates generations and
 /// makes the <see cref="AgentStoreLimits"/> checks exact.
 /// </summary>
-internal sealed class PgAgentFileStore : IAgentStore
+internal sealed partial class PgAgentFileStore : IAgentStore
 {
     internal const int InlineBytes = 256 * 1024;
     internal const string BlobStoreName = "agent-files";
@@ -264,35 +264,17 @@ internal sealed class PgAgentFileStore : IAgentStore
             async () =>
             {
                 var sha256 = SHA256.HashData(content.Span);
-                // A blob is durable once written, so a write the commit would refuse must not
-                // reach it: admit it first, without holding the tenant lock across the upload.
-                // The commit checks everything again.
-                // The admission runs in a fenced write transaction that commits nothing.
+                BlobReservation? reservation = null;
                 if (content.Length > InlineBytes)
-                    try
+                {
+                    var reservations = await ReserveAsync(key, [(sha256, content)], async (tx, usage, limit, cancel) =>
                     {
-                        await database
-                            .WriteAsync<bool>(
-                                async (tx, cancel) =>
-                                {
-                                    var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
-                                    var limit = limits();
-                                    if (content.Length > limit.FileBytes)
-                                        throw AgentFileErrors.FileTooLarge(path, limit);
-                                    var (bytes, entries) = await WriteAdmissionAsync(
-                                            tx, key, agent, path, content.Length, expectedGeneration, cancel
-                                        )
-                                        .ConfigureAwait(false);
-                                    usage.Admit(limit, bytes, entries);
-                                    throw new AdmittedException();
-                                },
-                                new PgWriteOptions(),
-                                token
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    catch (AdmittedException) { }
-                var blobKey = await StoreLargeAsync(key, content, sha256, token).ConfigureAwait(false);
+                        if (content.Length > limit.FileBytes) throw AgentFileErrors.FileTooLarge(path, limit);
+                        var (bytes, entries) = await WriteAdmissionAsync(tx, key, agent, path, content.Length, expectedGeneration, cancel);
+                        usage.Admit(limit, bytes, entries);
+                    }, token);
+                    reservation = reservations[BlobKey(key, sha256)];
+                }
                 long generation = 0;
                 return await database
                     .WriteAsync(
@@ -315,6 +297,7 @@ internal sealed class PgAgentFileStore : IAgentStore
                                 - await PrepareParentsAsync(tx, key, path, cancel).ConfigureAwait(false);
                             var bytes = content.Length - (current?.Size ?? 0);
                             usage.Admit(limit, bytes, entries);
+                            var blobKey = reservation is null ? null : await PublishBlobAsync(tx, reservation, content, sha256, cancel);
                             generation = await AllocateGenerationAsync(tx, cancel).ConfigureAwait(false);
                             await tx.ExecuteAsync(
                                     "INSERT INTO agent_files (agent, path, kind, size, sha256, generation, inline, blob_key)"
@@ -598,38 +581,17 @@ internal sealed class PgAgentFileStore : IAgentStore
                 var empty = directories
                     .Where(directory => !paths.Any(other => other != directory && AgentFilePaths.Within(other, directory)))
                     .ToArray();
-                // Initial blobs are admitted first, as a file write's are: in a fenced
-                // transaction that commits nothing, with the root still absent.
-                if (files.Any(file => file.Value.Length > InlineBytes))
-                    try
-                    {
-                        await database
-                            .WriteAsync<bool>(
-                                async (tx, cancel) =>
-                                {
-                                    var usage = await LockUsageAsync(tx, cancel).ConfigureAwait(false);
-                                    if (await RowAtAsync(tx, agent, "", cancel).ConfigureAwait(false) is not null)
-                                        throw new AgentFileConflictException($"Agent '{agent}' already exists.");
-                                    var limit = limits();
-                                    if (files.FirstOrDefault(file => file.Value.Length > limit.FileBytes) is { Key: not null } large)
-                                        throw AgentFileErrors.FileTooLarge(large.Key, limit);
-                                    usage.Admit(limit, files.Sum(file => (long)file.Value.Length), files.Count + empty.Length);
-                                    throw new AdmittedException();
-                                },
-                                new PgWriteOptions(),
-                                token
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    catch (AdmittedException) { }
-                var stored = new List<(string Path, byte[] Content, byte[] Sha256, string? BlobKey)>();
-                foreach (var (path, content) in files)
+                var stored = files.Select(file => (Path: file.Key, Content: file.Value, Sha256: SHA256.HashData(file.Value))).ToArray();
+                var largeFiles = stored.Where(file => file.Content.Length > InlineBytes)
+                    .Select(file => (file.Sha256, (ReadOnlyMemory<byte>)file.Content)).ToArray();
+                var reservations = await ReserveAsync(agent, largeFiles, async (tx, usage, limit, cancel) =>
                 {
-                    var sha256 = SHA256.HashData(content);
-                    stored.Add(
-                        (path, content, sha256, await StoreLargeAsync(agent, content, sha256, token).ConfigureAwait(false))
-                    );
-                }
+                    if (await RowAtAsync(tx, agent, "", cancel) is not null)
+                        throw new AgentFileConflictException($"Agent '{agent}' already exists.");
+                    if (stored.FirstOrDefault(file => file.Content.Length > limit.FileBytes) is { Path: not null } large)
+                        throw AgentFileErrors.FileTooLarge(large.Path, limit);
+                    usage.Admit(limit, files.Sum(file => (long)file.Value.Length), files.Count + empty.Length);
+                }, token);
                 return await database
                     .WriteAsync(
                         async (tx, cancel) =>
@@ -638,7 +600,7 @@ internal sealed class PgAgentFileStore : IAgentStore
                             if (await RowAtAsync(tx, agent, "", cancel).ConfigureAwait(false) is not null)
                                 throw new AgentFileConflictException($"Agent '{agent}' already exists.");
                             var bytes = stored.Sum(file => (long)file.Content.Length);
-                            var entries = (long)stored.Count + empty.Length;
+                            var entries = (long)stored.Length + empty.Length;
                             var limit = limits();
                             if (stored.FirstOrDefault(file => file.Content.Length > limit.FileBytes) is { Path: not null } large)
                                 throw AgentFileErrors.FileTooLarge(large.Path, limit);
@@ -647,6 +609,9 @@ internal sealed class PgAgentFileStore : IAgentStore
                             foreach (var directory in empty)
                                 await InsertDirectoryAsync(tx, agent, directory, cancel).ConfigureAwait(false);
                             foreach (var file in stored)
+                            {
+                                var blobKey = file.Content.Length <= InlineBytes ? null : await PublishBlobAsync(tx,
+                                    reservations[BlobKey(agent, file.Sha256)], file.Content, file.Sha256, cancel);
                                 await tx.ExecuteAsync(
                                         "INSERT INTO agent_files (agent, path, kind, size, sha256, generation, inline, blob_key)"
                                             + " VALUES ($1, $2, 'file', $3, $4, $5, $6, $7)",
@@ -656,10 +621,11 @@ internal sealed class PgAgentFileStore : IAgentStore
                                         (long)file.Content.Length,
                                         file.Sha256,
                                         await AllocateGenerationAsync(tx, cancel).ConfigureAwait(false),
-                                        file.BlobKey is null ? file.Content : NullBytes(),
-                                        file.BlobKey
+                                        blobKey is null ? file.Content : NullBytes(),
+                                        blobKey
                                     )
                                     .ConfigureAwait(false);
+                            }
                             await ApplyUsageAsync(tx, bytes, entries, cancel).ConfigureAwait(false);
                             BeforeCommit?.Invoke();
                             return true;
@@ -885,21 +851,6 @@ internal sealed class PgAgentFileStore : IAgentStore
     private static NpgsqlParameter NullBytes() =>
         new() { Value = DBNull.Value, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Bytea };
 
-    private async Task<string?> StoreLargeAsync(
-        string agent,
-        ReadOnlyMemory<byte> content,
-        byte[] sha256,
-        CancellationToken token
-    )
-    {
-        if (content.Length <= InlineBytes)
-            return null;
-        var key = BlobKey(agent, sha256);
-        // Content-addressed, so an existing blob already holds these bytes.
-        await blobs.CreateAsync(key, content, keepExisting: true, token).ConfigureAwait(false);
-        return key;
-    }
-
     private sealed record Row(string Kind, long Generation, long Size, byte[]? Sha256, byte[]? Inline, string? BlobKey);
 
     private sealed record UsageRow(long Bytes, long Entries)
@@ -972,9 +923,6 @@ internal sealed class PgAgentFileStore : IAgentStore
         if (bytes > limit)
             throw AgentFileErrors.PathTooLong(bytes, limit);
     }
-
-    // Ends an admission transaction without committing it.
-    private sealed class AdmittedException : Exception;
 
     // The checks of a file write's commit, without its effects: membership, the target's and
     // its parents' shape and the expected generation. Returns the usage the write adds.
