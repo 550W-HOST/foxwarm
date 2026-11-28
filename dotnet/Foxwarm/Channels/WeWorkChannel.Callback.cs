@@ -322,7 +322,13 @@ internal sealed partial class WeWorkChannel
                 var conversation = chatId.Length > 0 ? chatId : user;
                 var sendOnly = sessions.IsChannelSendOnly(id + ":" + conversation);
                 WeWorkStreamSnapshot? stream = null;
-                if (streamEnabled && messageIsAibot && !sendOnly)
+                var passiveOnly =
+                    sendOnly
+                    && delivery.Mode == "webhook"
+                    && !Nonempty(responseUrl)
+                    && !Nonempty(replyWebhook)
+                    && !WebSocketEnabled;
+                if (streamEnabled && messageIsAibot && (!sendOnly || passiveOnly))
                 {
                     stream = streams.Begin(
                         conversation,
@@ -372,7 +378,8 @@ internal sealed partial class WeWorkChannel
                         ),
                     Nonempty(Text(config["selfName"])) ? Text(config["selfName"]).Trim() : null,
                     BeforeQueueAdmission: stream is not null
-                        ? sessionId => ActivateStream(conversation, stream.Id, sessionId)
+                        ? sessionId =>
+                            ActivateStream(conversation, stream.Id, sessionId, passiveOnly)
                         : null,
                     EndSessionPresentation: streamEnabled
                         ? sessionId => EndSessionPresentation(conversation, sessionId)
@@ -425,14 +432,32 @@ internal sealed partial class WeWorkChannel
         {
             if (streamId is not null)
                 lock (contextGate)
-                    PushFinishedStream(streams.FinishUnadmitted(streamId));
+                    PushFinishedStream(
+                        streams.FinishRequest(
+                            streamId,
+                            "The message could not be accepted for processing."
+                        )
+                    );
         }
     }
 
-    private void ActivateStream(string conversation, string streamId, string sessionId)
+    private void ActivateStream(
+        string conversation,
+        string streamId,
+        string sessionId,
+        bool requestOnly
+    )
     {
         lock (contextGate)
         {
+            if (requestOnly)
+            {
+                streams.FinishRequest(
+                    streamId,
+                    "Message accepted. This conversation is in send-only mode."
+                );
+                return;
+            }
             var binding = sessions.ChannelBinding(id + ":" + conversation);
             if (Text(binding?["sessionId"]) == sessionId && Text(binding?["mode"]) != "send-only")
             {

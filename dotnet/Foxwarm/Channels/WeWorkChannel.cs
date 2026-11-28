@@ -61,7 +61,8 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         streams = new(
             (int)Math.Clamp(requestedBytes == 0 ? 20000 : requestedBytes, 1, 20480),
             now,
-            Text(config["aibot"]?["streamThinkFrame"])
+            Text(config["aibot"]?["streamThinkFrame"]),
+            previous => SessionWait.Text(sessions.Catalog.Resolve(previous)["sessionId"])
         );
         websocketConfig = config["aibot"]?["websocket"] as JsonObject ?? new();
     }

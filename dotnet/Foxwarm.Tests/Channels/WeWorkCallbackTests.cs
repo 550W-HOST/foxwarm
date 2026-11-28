@@ -111,6 +111,62 @@ public sealed class WeWorkCallbackTests
         payload["stream"]!["content"]!.GetValue<string>();
 
     [Fact]
+    public async Task Mode_change_after_identity_move_closes_the_original_card()
+    {
+        await using var peer = await WeWorkPeer.StartAsync();
+        var port = WeWorkPeer.Port();
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = peer.Config(port) },
+            dependencies: peer.Dependencies
+        );
+        await f.Manager.ManagedChannels!.ReloadAsync();
+        f.Manager.AttachChannel("work:wrk-chat", f.Owner);
+        using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}/") };
+        var oldCard = await Post(http, WeWorkPeer.Text("older"));
+        await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 1);
+        await f.Manager.MoveIdentityAsync(f.Owner, new() { ["newSessionId"] = "renamed" });
+        var change = await Post(http, WeWorkPeer.Text("mode", "/channel mode send-only"));
+        await TelegramChannelTests.Until(() => f.Manager.IsChannelSendOnly("work:wrk-chat"));
+        var notice = await Refresh(http, Id(change));
+        Assert.Contains("send-only", Content(notice));
+        var old = await Refresh(http, Id(oldCard));
+        Assert.True(
+            old["stream"]!["finish"]!.GetValue<bool>(),
+            "active card still unfinished after rename and successful change to send-only"
+        );
+    }
+
+    [Fact]
+    public async Task Send_only_callback_without_a_proactive_route_can_answer_a_command()
+    {
+        await using var peer = await WeWorkPeer.StartAsync();
+        var port = WeWorkPeer.Port();
+        var config = peer.Config(port);
+        config.Remove("webhookUrl");
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = config },
+            dependencies: peer.Dependencies
+        );
+        await f.Manager.ManagedChannels!.ReloadAsync();
+        f.Manager.AttachChannel(
+            "work:wrk-chat",
+            f.Owner,
+            updates: new() { ["mode"] = "send-only" }
+        );
+        using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}/") };
+        var reply = await Post(http, WeWorkPeer.Text("identity", "/whoami"));
+        var answer = await Refresh(http, Id(reply));
+        Assert.True(answer["stream"]!["finish"]!.GetValue<bool>());
+        Assert.Contains("alice", Content(answer));
+        var input = await Post(http, WeWorkPeer.Text("ordinary"));
+        await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 1);
+        var accepted = await Refresh(http, Id(input));
+        Assert.True(accepted["stream"]!["finish"]!.GetValue<bool>());
+        Assert.Contains("send-only", Content(accepted));
+        Assert.Empty(peer.Calls);
+    }
+
+    [Fact]
     public async Task Command_followup_uses_its_HTTP_response_url_after_finishing_the_card()
     {
         await using var peer = await WeWorkPeer.StartAsync();

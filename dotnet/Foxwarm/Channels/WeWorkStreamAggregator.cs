@@ -35,7 +35,8 @@ internal sealed record WeWorkStreamSnapshot(
 internal sealed class WeWorkStreamAggregator(
     int maxBytes = 20000,
     Func<DateTimeOffset>? now = null,
-    string? thinkFrame = null
+    string? thinkFrame = null,
+    Func<string, string?>? canonicalSession = null
 )
 {
     private abstract class Block;
@@ -110,6 +111,10 @@ internal sealed class WeWorkStreamAggregator(
         }
     }
 
+    private bool SameSession(string? previous, string current) =>
+        previous == current
+        || previous is not null && canonicalSession?.Invoke(previous) == current;
+
     internal WeWorkStreamSnapshot? Activate(string id, string sessionId)
     {
         lock (gate)
@@ -122,7 +127,10 @@ internal sealed class WeWorkStreamAggregator(
             state.SessionId = sessionId;
             conversations[conversation] = state;
             return previous is { Finish: false } && previous != state
-                ? FinishWithText(previous, previous.SessionId == sessionId ? null : BindingChanged)
+                ? FinishWithText(
+                    previous,
+                    SameSession(previous.SessionId, sessionId) ? null : BindingChanged
+                )
                 : null;
         }
     }
@@ -133,7 +141,7 @@ internal sealed class WeWorkStreamAggregator(
         {
             Cleanup();
             var active = conversations.GetValueOrDefault(conversation.Trim());
-            return active is { Finish: false } && active.SessionId == sessionId
+            return active is { Finish: false } && SameSession(active.SessionId, sessionId)
                 ? FinishWithText(active, BindingChanged)
                 : null;
         }
@@ -150,13 +158,13 @@ internal sealed class WeWorkStreamAggregator(
         }
     }
 
-    internal WeWorkStreamSnapshot? FinishUnadmitted(string id)
+    internal WeWorkStreamSnapshot? FinishRequest(string id, string notice)
     {
         lock (gate)
         {
             Cleanup();
             return streams.GetValueOrDefault(id) is { Finish: false, SessionId: null } state
-                ? FinishWithText(state, "The message could not be accepted for processing.")
+                ? FinishWithText(state, notice)
                 : null;
         }
     }
