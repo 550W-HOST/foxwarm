@@ -62,6 +62,9 @@ async function login(root, token, oldValue) {
     assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), token)
     const role = await page.evaluate(async () => (await (await fetch('./api/auth/session')).json()).role)
     assert.equal(role, token === host.token ? 'admin' : 'webui')
+    assert.equal(await page.evaluate(async () => (await fetch('./api/session-sequence', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    })).status), 200, 'The signed-in browser can POST using its own public origin')
     assert.equal(await page.evaluate(async () => (await fetch('./api/setup/status')).status), token === host.token ? 200 : 403)
     return { context, page }
   } catch (error) { await context.close(); throw error }

@@ -78,6 +78,7 @@ internal sealed class TenantReplica
 {
     private readonly TenantReplicaOptions options;
     private readonly PgDatabase app;
+    private readonly HostnameDirectory hostnames;
     private readonly string connectionString;
     private readonly TenantRuntimeFactory factory;
     private readonly Action<string> log;
@@ -110,6 +111,7 @@ internal sealed class TenantReplica
         options.Timings.Validate();
         this.options = options;
         this.app = app;
+        hostnames = new HostnameDirectory(app);
         this.connectionString = connectionString;
         this.factory = factory;
         this.log = log;
@@ -181,7 +183,6 @@ internal sealed class TenantReplica
         activations = coordinator;
         renewer.SettingsChanged += coordinator.SettingsChanged;
         var registry = new ReplicaRegistry(control);
-        var hostnames = new HostnameDirectory(app);
         using var router = new TenantRouter(Replica, new MeshAuthentication(options.Mesh.Secret, Replica),
             new RouteDirectory(app), new ReplicaRegistry(app), coordinator, hostnames, options.Timings, DispatchTenantAsync, AcceptingNew, log, stop, options.TenantHoldLimit);
         var placement = new PlacementMaintenance(app, Replica, options, coordinator, () => administrativelyDraining = true, log);
@@ -275,7 +276,8 @@ internal sealed class TenantReplica
         }
         var database = new TenantDb(app, context.Grant.TenantId, context.Grant.Epoch, maxInFlight: context.Grant.DbStatements ?? options.MaxInFlight);
         context.Fence.Attach(database);
-        var server = new TenantServer(options.PublicUrl(context.Generation.Tenant));
+        var slug = context.Generation.Tenant;
+        var server = new TenantServer(options.PublicUrl(slug), hostnames, context.Grant.TenantId);
         var built = Interlocked.Read(ref operatorVersion);
         var runtime = await factory(new(context, database, server), token).ConfigureAwait(false);
         var wakeups = runtime is MainHostRuntime main ? new Autonomous.RuntimeWakeups(main.Host.Sessions, database) : null;

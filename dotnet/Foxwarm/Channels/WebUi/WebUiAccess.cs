@@ -88,10 +88,11 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
                 .StartsWith("Bearer ", StringComparison.Ordinal)
         )
             token = context.Request.Headers.Authorization.ToString()[7..].Trim();
+        var fromCookie = token is null;
         token ??= context.Request.Cookies["foxwarm_token"];
         if (configuration.Authenticate(token) is not { } verified)
             return null;
-        var request = new WebUiRequest(this, configuration, verified.Id, verified.Identity);
+        var request = new WebUiRequest(this, configuration, verified.Id, verified.Identity, fromCookie);
         context.Items[RequestKey] = request;
         return request;
     }
@@ -329,10 +330,12 @@ internal sealed class WebUiRequest(
     WebUiAccess access,
     AccessConfiguration configuration,
     string identityId,
-    AccessIdentity identity
+    AccessIdentity identity,
+    bool fromCookie
 )
 {
     private readonly ConcurrentDictionary<string, string> bindings = new(StringComparer.Ordinal);
+    internal bool FromCookie => fromCookie;
     internal string IdentityId => identityId;
     internal AccessIdentity Identity => identity;
     internal bool Current => configuration.Current(identityId, identity);
