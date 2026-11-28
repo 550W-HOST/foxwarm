@@ -126,6 +126,32 @@ services:
       disable: true
     restart: unless-stopped
 
+  foxwarm-master:
+    <<: *replica
+    profiles: [master]
+    image: ${FOXWARM_MASTER_IMAGE:-foxwarm-master:local}
+    # One durable master, never scaled as another general replica.
+    deploy: {replicas: 1, update_config: {order: stop-first}}
+    environment:
+      <<: *replica-environment
+      FOXWARM_ROLE: master-host
+      FOXWARM_HOSTED_TOPOLOGY: tenants
+      FOXWARM_REPLICA_ID: foxwarm-master
+      FOXWARM_ADVERTISE_ADDRESS: foxwarm-master:3001
+      FOXWARM_AGENTS_DIR: /master
+      FOXWARM_SCRATCH_DIR: /master/scratch
+      FOXWARM_MESH_SECRET_FILE: /run/secrets/mesh-secret
+    secrets: [database-url, kek, s3-access-key-id, s3-secret-access-key, mesh-secret]
+    volumes:
+      - ./deployment.yaml:/etc/foxwarm/deployment.yaml:ro
+      - master:/master
+    tmpfs:
+      - /tmp:uid=1000,gid=1000,mode=1777
+    shm_size: 1g
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=../../docker/seccomp-chromium.json
+
   foxwarm-1:
     <<: *replica
     environment:
@@ -159,8 +185,11 @@ networks:
 volumes:
   postgres: {}
   objects: {}
+  master: {}
 
 secrets:
+  mesh-secret:
+    file: ./secrets/mesh-secret
   postgres-password:
     file: ./secrets/postgres-password
   owner-password:

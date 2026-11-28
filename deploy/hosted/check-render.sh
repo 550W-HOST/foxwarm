@@ -24,6 +24,15 @@ docker compose -f "$work/stack/compose.yaml" config --format json | node -e '
   const fs = require("node:fs"); const config = JSON.parse(fs.readFileSync(0, "utf8"));
   for (const service of Object.values(config.services)) for (const {source} of service.secrets || []) fs.accessSync(config.secrets[source].file);
 '
+docker compose -f "$work/stack/compose.yaml" --profile master config --format json | node -e '
+  const config = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+  const master = config.services["foxwarm-master"];
+  if (master.environment.FOXWARM_ROLE !== "master-host" || master.deploy.replicas !== 1 ||
+      master.deploy.update_config.order !== "stop-first" || !master.volumes.some(v => v.source === "master" && v.target === "/master"))
+    throw new Error("The master host must have one stop-first replica and a persistent master volume");
+  for (const name of ["foxwarm-1", "foxwarm-2"]) if (config.services[name].volumes.some(v => v.source === "master"))
+    throw new Error(`${name} mounts the operator volume`);
+'
 sh "$here/generate-secrets.sh" --operator "$legacy"
 docker compose -f "$work/stack/compose.yaml" --profile operator config --quiet
 echo "compose: compose.yaml renders"
@@ -67,6 +76,16 @@ for values in "$chart"/ci/*-values.yaml; do
     awk '/^  operator.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/operator-config.yaml"
     grep -Fq '{slug}' "$work/operator-config.yaml"
     parse "$work/operator-config.yaml"
+  fi
+  if grep -q '^  master.yaml: |' "$work/$name.yaml"; then
+    helm template foxwarm "$chart" -f "$values" --show-only templates/master.yaml > "$work/master.yaml"
+    grep -qx 'kind: StatefulSet' "$work/master.yaml"
+    grep -qx '  replicas: 1' "$work/master.yaml"
+    grep -Fq 'accessModes: [ReadWriteOnce]' "$work/master.yaml"
+    awk '/^  master.yaml: \|/{grab=1; next} grab && /^    /{sub(/^    /, ""); print; next} grab{grab=0}' "$work/$name.yaml" > "$work/master-config.yaml"
+    parse "$work/master-config.yaml"
+  else
+    ! grep -qx 'kind: StatefulSet' "$work/$name.yaml" || exit 1
   fi
   echo "helm: $name renders and validates"
 done

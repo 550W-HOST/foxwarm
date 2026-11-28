@@ -23,6 +23,18 @@ operator:
 
 tenant: default
 
+# The optional pinned operator tenant. Only this pod mounts the master volume.
+masterHost:
+  enabled: false
+  image: ""        # Full master-host image, including tag.
+  storage: 20Gi
+  storageClassName: ""
+  # Install docker/seccomp-chromium.json in the kubelet seccomp directory on eligible hosts.
+  chromiumSeccompProfile: foxwarm/seccomp-chromium.json
+mesh:
+  port: 3004
+  secretName: ""   # Existing Secret, key mesh-secret: base64 text encoding 32 random bytes.
+
 ports:
   # The public listener (bot.httpPort of the deployment configuration).
   http: 3001
