@@ -76,11 +76,7 @@ internal sealed class SessionRuntime(SessionManager manager)
 
     public JsonObject[] ListSessions() => manager.ListPresentations();
 
-    internal async Task<JsonObject[]> ListSessionsAsync()
-    {
-        var ids = await Catalog.QueryAsync(() => Catalog.List().Select(row => SessionCatalog.Text(row["id"])!).ToArray());
-        return await ProjectionsAsync(ids, includeLocal: true);
-    }
+    internal Task<JsonObject[]> ListSessionsAsync() => manager.CatalogPresentationsAsync(null, includeLocal: true);
 
     internal (long Total, JsonObject[] Page) ListPage(int start, int count) =>
         manager.CatalogMetadataOffset(start, count);

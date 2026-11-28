@@ -14,10 +14,9 @@ namespace Foxwarm.Hosted.Postgres;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One monitor serializes the methods the file catalog serializes; a method's statements share
-/// one transaction, and calls made while it runs (including the presentation-mutation hook)
-/// join it. Ordinary <see cref="Get"/> and <see cref="Resolve"/> run without the monitor in
-/// their own read transaction.
+/// Writes serialize. An asynchronous catalog query has its own read-only snapshot, including
+/// nested catalog and archive reads. Readers wait for the tenant's statement cap, not for the
+/// writer. Ordinary point lookups can also join another store's tenant transaction.
 /// </para>
 /// <para>
 /// Every write is one fenced <see cref="TenantDb"/> transaction that also raises the tenant's
@@ -75,8 +74,15 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     private readonly Foxwarm.Storage.StoreGate gate = new();
     private readonly string instance = Guid.NewGuid().ToString("N");
 
-    // The transaction of the method holding the gate; only the gate holder reads or writes it.
+    // The transaction of the synchronous gate holder or writer.
     private PgTx? current;
+
+    // A QueryAsync callback is synchronous; each worker can run its own read snapshot.
+    // Do not flow this slot to child Tasks or share its connection across catalog instances.
+    [ThreadStatic]
+    private static (PgSessionCatalog? Store, PgTx? Transaction) query;
+    private PgTx? QueryTransaction => ReferenceEquals(query.Store, this) ? query.Transaction : null;
+    private IDisposable? ReadGate() => QueryTransaction is null ? gate.Enter() : null;
     private long revision;
     private volatile bool initialized;
 
@@ -89,6 +95,8 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     {
         get
         {
+            if (QueryTransaction is { } snapshot)
+                return instance + ":" + (snapshot.Scalar("SELECT revision FROM catalog_revision") as long? ?? 0);
             if (!initialized)
                 using (gate.Enter())
                     EnsureInitialized();
@@ -120,7 +128,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     // Caller holds the gate. Nested calls share the running transaction.
     private T Read<T>(Func<PgTx, T> body)
     {
-        if (current is { } running)
+        if ((QueryTransaction ?? current) is { } running)
             return body(running);
         return database.Read(tx => WithCurrent(tx, () => body(tx)));
     }
@@ -129,7 +137,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     // store's body runs in on this database (the Task store canonicalizing references); the
     // gate holder's join its own.
     private T Exact<T>(Func<PgTx, T> body) =>
-        gate.IsHeld && current is { } running ? body(running) : database.ReadOrJoin(body);
+        QueryTransaction is { } snapshot ? body(snapshot) : database.ReadOrJoin(body);
 
     // Caller holds the gate and runs no transaction. `raise` decides from the body's result
     // whether this write raises the revision; without it every write does.
@@ -190,7 +198,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
         }
     }
 
-    private PgTx Current => current ?? throw new InvalidOperationException("No catalog transaction.");
+    private PgTx Current => QueryTransaction ?? current ?? throw new InvalidOperationException("No catalog transaction.");
 
     // ---- Reading ------------------------------------------------------------------------
 
@@ -263,7 +271,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
         var storable = StorableIds(ids);
         if (storable.Length == 0)
             return [];
-        using (gate.Enter())
+        using (ReadGate())
         {
             var rows = Read(tx =>
                 Rows(
@@ -279,7 +287,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public JsonObject[] List(int limit = int.MaxValue, int offset = 0)
     {
-        using (gate.Enter())
+        using (ReadGate())
             return Read(tx =>
                     Rows(
                         tx,
@@ -293,7 +301,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public JsonObject[] QuestionRows(int limit)
     {
-        using (gate.Enter())
+        using (ReadGate())
             return Read(tx =>
                     Rows(
                         tx,
@@ -345,7 +353,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     {
         if (!Storable(id))
             return null;
-        using (gate.Enter())
+        using (ReadGate())
             return Read(_ =>
             {
                 var row = Get(id);
@@ -360,7 +368,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     {
         if (!Storable(id))
             return [];
-        using (gate.Enter())
+        using (ReadGate())
             return Read(_ =>
             {
                 var result = new List<string>();
@@ -381,7 +389,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     {
         if (!Storable(id))
             return [];
-        using (gate.Enter())
+        using (ReadGate())
             return Read(tx =>
                     Rows(
                         tx,
@@ -651,7 +659,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public string ValidateIdentityParent(string child, string parent)
     {
-        using (gate.Enter())
+        using (ReadGate())
             return Read(_ =>
             {
                 var id = Text(
@@ -666,7 +674,7 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
 
     public DeleteSelection SelectDeletion(string requested, bool recursive)
     {
-        using (gate.Enter())
+        using (ReadGate())
             return Read(_ => SessionCatalogRules.SelectDeletion(this, requested, recursive));
     }
 
@@ -781,7 +789,13 @@ internal sealed partial class PgSessionCatalog(TenantDb database)
     /// members the body calls join the hold.
     /// </summary>
     public Task<T> QueryAsync<T>(Func<T> body) =>
-        gate.HoldAsync(() => database.ReadAsync(tx => WithCurrent(tx, body)));
+        database.ReadAsync(tx =>
+        {
+            var previous = query;
+            query = (this, tx);
+            try { return body(); }
+            finally { query = previous; }
+        }, snapshot: true);
 
     public IReadOnlyList<SessionCatalog.SequenceSession> SequenceSessions() =>
         database.Read(tx =>

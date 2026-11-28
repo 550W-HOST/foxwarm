@@ -118,6 +118,35 @@ public sealed class PostgresSessionCatalogTests(ITestOutputHelper output)
     ];
 
     [Fact]
+    public async Task CatalogQueriesOverlapAndKeepTheirOwnRevisionAndRows()
+    {
+        using var fixture = PostgresCatalogFixture.Open();
+        var catalog = new PgSessionCatalog(fixture.Tenant);
+        Seed(catalog);
+        var before = catalog.Revision;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var resume = new ManualResetEventSlim();
+        var first = Task.Run(() => catalog.QueryAsync(() =>
+        {
+            var initial = catalog.List();
+            entered.TrySetResult();
+            resume.Wait();
+            return (Initial: initial.Length, Final: catalog.List().Length, Revision: catalog.Revision);
+        }));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var second = catalog.QueryAsync(() => catalog.List().Length);
+            Assert.Equal(4, await second.WaitAsync(TimeSpan.FromSeconds(2)));
+            await catalog.PublishAuthorityAsync(Row("extra", 7), allowInsert: true).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.NotEqual(before, catalog.Revision);
+            Assert.Equal(5, await catalog.QueryAsync(() => catalog.List().Length));
+        }
+        finally { resume.Set(); }
+        Assert.Equal((4, 4, before), await first);
+    }
+
+    [Fact]
     public void Every_write_operation_after_a_takeover_is_fenced_and_leaves_nothing_behind()
     {
         using var fixture = PostgresCatalogFixture.Open();

@@ -296,7 +296,7 @@ internal sealed partial class SessionManager
         return render is null ? [] : render(models.Capture());
     }
 
-    internal async Task<JsonObject[]> CatalogPresentationsAsync(string[] ids, bool includeLocal)
+    internal async Task<JsonObject[]> CatalogPresentationsAsync(string[]? ids, bool includeLocal)
     {
         var render = await Catalog.QueryAsync(() => PreparePresentations(ids, includeLocal)).ConfigureAwait(false);
         return render is null ? [] : render(await models.CaptureAsync().ConfigureAwait(false));
@@ -304,11 +304,11 @@ internal sealed partial class SessionManager
 
     // Collect catalog and archive data first. Rendering uses the model configuration, which
     // can read its own tenant documents; it must run outside the catalog transaction and gate.
-    private Func<HostModels, JsonObject[]>? PreparePresentations(string[] ids, bool includeLocal)
+    private Func<HostModels, JsonObject[]>? PreparePresentations(string[]? ids, bool includeLocal)
     {
         var all = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
-        foreach (var chunk in ids.Distinct(StringComparer.Ordinal).Chunk(200))
-        foreach (var row in Catalog.GetMany(chunk))
+        var rows = ids is null ? Catalog.List() : ids.Distinct(StringComparer.Ordinal).Chunk(200).SelectMany(Catalog.GetMany);
+        foreach (var row in rows)
             all[SessionCatalog.Text(row["id"])!] = row;
         var current = LocalProjections();
         var currentMain = new Dictionary<string, JsonObject>(all, StringComparer.Ordinal);
