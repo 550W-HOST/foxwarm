@@ -238,7 +238,7 @@ internal static class AgentFileErrors
         new("totalBytes", $"Agent files are full: this write would exceed the {Size(limit.TotalBytes)} limit.");
 
     internal static AgentStoreQuotaException RetainedTooLarge(decimal limit) =>
-        new("retainedBytes", $"Agent file storage is full: this write would exceed the {Size(limit)} limit for retained content.");
+        new("retainedBytes", $"Agent file storage is full ({Size(limit)} limit). Remove some files, then try again.");
 
     internal static AgentStoreQuotaException TooManyFiles(AgentStoreLimits limit) =>
         new(

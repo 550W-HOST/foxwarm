@@ -89,8 +89,8 @@ internal sealed partial class PgAgentFileStore
                 var bound = 2m * limit.TotalBytes;
                 if (await ScalarAsync(tx, "SELECT sum(byte_length)>2*$1::numeric FROM agent_blob_reservations", ct, limit.TotalBytes) is true)
                 {
-                    if (s3 is not null)
-                        Console.Error.WriteLine("[hosted] Agent blob reservations are full. Check that the operator is running and can collect unreferenced object versions.");
+                    var detail = s3 is null ? "" : " Check that the operator is running and can collect unreferenced object versions.";
+                    Console.Error.WriteLine($"[hosted] Agent file admission for tenant {database.TenantId} would exceed the retained content limit of {bound} bytes.{detail}");
                     throw AgentFileErrors.RetainedTooLarge(bound);
                 }
             }
